@@ -62,6 +62,10 @@ export const K = {
  * fije, el descubrimiento es local a cada proxio.
  */
 const NODE_ID_LEN = 12
+// Comprueba la FORMA, no el alfabeto exacto, y es a propósito: el alfabeto lo
+// decide el proxio (que excluye los caracteres confundibles) y esta librería no
+// tiene por qué llevar una copia que se desincronice. Un id con un símbolo que
+// el proxio no emite simplemente no va a coincidir con ningún nodo.
 const isNodeId = (s) => new RegExp(`^[1-9A-Z]{${NODE_ID_LEN}}$`).test(String(s || ''))
 
 // Sin valor por defecto: el id de un proxio se DERIVA de su llave, así que no

@@ -24,7 +24,8 @@ test('parseEnvelope no colisiona con el tag WebRTC', () => {
   assert.equal(env.t, undefined)
 })
 
-const ID_A = '3PQ2QE8ZMD8J'   // ids de nodo reales: 12 chars del alfabeto
+// Ids con el alfabeto vigente del proxio (sin I L S Z B G).
+const ID_A = '3PQ2QE8YMD8J'
 const ID_B = 'RAEKMT36F81J'
 
 test('nombres de canal: llevan delante el proxio que los hospeda', () => {
