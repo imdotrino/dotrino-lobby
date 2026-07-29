@@ -1,6 +1,6 @@
 {
   "name": "@dotrino/lobby",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Lobby + matchmaking reciclable para juegos del ecosistema Dotrino: salas, asientos, espectadores, motor de turnos autoritativo, reputación y contactos sobre el proxy/identity/reputation compartidos",
   "type": "module",
   "main": "src/index.js",

@@ -50,21 +50,28 @@ export const K = {
  * NODO DUEÑO DE LOS CANALES.
  *
  * Un canal del proxio puede llevar delante el prefijo del nodo que lo hospeda
- * (`P1/loquesea`). Ese nodo guarda la membresía y los demás le pasan las
+ * (`<id de 12>/loquesea`). Ese nodo guarda la membresía y los demás le pasan las
  * operaciones. Sin prefijo, cada proxio tiene su propia copia del canal — que es
  * lo que hacía que dos personas en proxios distintos NO se vieran en la misma
  * lista de salas, aunque los mensajes entre ellas sí cruzaran.
  *
  * El **canal de descubrimiento** es uno solo para todo el ecosistema, así que
  * tiene que vivir en un nodo fijo: si cada quien lo publicara en el suyo,
- * habría tantas listas de salas como proxios. Se puede cambiar con
- * `setLobbyHomeNode()` para una malla propia.
+ * habría tantas listas de salas como proxios. Se fija con `setLobbyHomeNode()`
+ * pasándole el id del proxio elegido (se lee de `client.node`). Mientras no se
+ * fije, el descubrimiento es local a cada proxio.
  */
-let LOBBY_HOME_NODE = 'P1'
+const NODE_ID_LEN = 12
+const isNodeId = (s) => new RegExp(`^[1-9A-Z]{${NODE_ID_LEN}}$`).test(String(s || ''))
+
+// Sin valor por defecto: el id de un proxio se DERIVA de su llave, así que no
+// hay ninguno que se pueda escribir aquí de antemano. Mientras no se fije, el
+// canal de descubrimiento es local a cada proxio (comportamiento de siempre).
+let LOBBY_HOME_NODE = null
 
 /** Fija en qué proxio vive el canal de descubrimiento de salas. */
-export function setLobbyHomeNode (prefix) {
-  LOBBY_HOME_NODE = /^[1-9A-Z]{2}$/.test(String(prefix || '')) ? prefix : null
+export function setLobbyHomeNode (nodeId) {
+  LOBBY_HOME_NODE = isNodeId(nodeId) ? nodeId : null
 }
 
 const withNode = (prefix, name) => (prefix ? `${prefix}/${name}` : name)
@@ -81,8 +88,8 @@ export const discoveryChannel = (gameId) => withNode(LOBBY_HOME_NODE, `cclobby/$
  * declararlo ni acordarlo.
  */
 export const roomChannel = (gameId, roomId) => {
-  const prefix = /^[1-9A-Z]{2}/.test(String(roomId || '')) ? String(roomId).slice(0, 2) : null
-  return withNode(prefix, `ccroom/${gameId}/${roomId}`)
+  const id = String(roomId || '').slice(0, NODE_ID_LEN)
+  return withNode(isNodeId(id) ? id : null, `ccroom/${gameId}/${roomId}`)
 }
 
 /**

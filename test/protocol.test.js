@@ -24,24 +24,26 @@ test('parseEnvelope no colisiona con el tag WebRTC', () => {
   assert.equal(env.t, undefined)
 })
 
+const ID_A = '3PQ2QE8ZMD8J'   // ids de nodo reales: 12 chars del alfabeto
+const ID_B = 'RAEKMT36F81J'
+
 test('nombres de canal: llevan delante el proxio que los hospeda', () => {
-  // El descubrimiento es uno solo para todo el ecosistema, así que vive en un
-  // nodo fijo: si cada quien lo publicara en el suyo habría tantas listas de
-  // salas como proxios.
-  assert.equal(discoveryChannel('chess'), 'P1/cclobby/chess')
-
   // La sala vive donde está su host, y eso se lee del propio roomId: el roomId
-  // ES la instancia del host, y las instancias llevan delante su prefijo de nodo.
-  assert.equal(roomChannel('chess', 'M2abc123'), 'M2/ccroom/chess/M2abc123')
+  // ES la instancia del host, y las instancias llevan delante el id de su nodo.
+  assert.equal(roomChannel('chess', ID_B + 'abc123'), ID_B + '/ccroom/chess/' + ID_B + 'abc123')
 
-  // Un roomId sin prefijo (dev, o un proxio sin identidad) se queda local.
+  // Un roomId sin id de nodo (dev, o un proxio sin identidad) se queda local.
   assert.equal(roomChannel('chess', 'tk1'), 'ccroom/chess/tk1')
+
+  // Sin nodo de descubrimiento fijado, el canal es local a cada proxio.
+  assert.equal(discoveryChannel('chess'), 'cclobby/chess')
 })
 
-test('el nodo del descubrimiento se puede cambiar para una malla propia', () => {
-  setLobbyHomeNode('M2')
-  assert.equal(discoveryChannel('chess'), 'M2/cclobby/chess')
-  setLobbyHomeNode(null)
-  assert.equal(discoveryChannel('chess'), 'cclobby/chess', 'sin nodo, canal local como antes')
+test('el nodo del descubrimiento se fija con el id del proxio elegido', () => {
+  setLobbyHomeNode(ID_A)
+  assert.equal(discoveryChannel('chess'), ID_A + '/cclobby/chess')
+  // Un id mal formado NO se acepta: dejaría un canal que no es de nadie.
   setLobbyHomeNode('P1')
+  assert.equal(discoveryChannel('chess'), 'cclobby/chess')
+  setLobbyHomeNode(null)
 })
