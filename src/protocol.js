@@ -46,10 +46,44 @@ export const K = {
   PONG: 'pong'              // { ts }
 }
 
-/** Canal de descubrimiento de salas de un juego (lista tokens de hosts). */
-export const discoveryChannel = (gameId) => `cclobby/${gameId}`
-/** Canal de presencia de una sala concreta (host + guests publican aquí). */
-export const roomChannel = (gameId, roomId) => `ccroom/${gameId}/${roomId}`
+/**
+ * NODO DUEÑO DE LOS CANALES.
+ *
+ * Un canal del proxio puede llevar delante el prefijo del nodo que lo hospeda
+ * (`P1/loquesea`). Ese nodo guarda la membresía y los demás le pasan las
+ * operaciones. Sin prefijo, cada proxio tiene su propia copia del canal — que es
+ * lo que hacía que dos personas en proxios distintos NO se vieran en la misma
+ * lista de salas, aunque los mensajes entre ellas sí cruzaran.
+ *
+ * El **canal de descubrimiento** es uno solo para todo el ecosistema, así que
+ * tiene que vivir en un nodo fijo: si cada quien lo publicara en el suyo,
+ * habría tantas listas de salas como proxios. Se puede cambiar con
+ * `setLobbyHomeNode()` para una malla propia.
+ */
+let LOBBY_HOME_NODE = 'P1'
+
+/** Fija en qué proxio vive el canal de descubrimiento de salas. */
+export function setLobbyHomeNode (prefix) {
+  LOBBY_HOME_NODE = /^[1-9A-Z]{2}$/.test(String(prefix || '')) ? prefix : null
+}
+
+const withNode = (prefix, name) => (prefix ? `${prefix}/${name}` : name)
+
+/** Canal de descubrimiento de salas de un juego (lista instancias de hosts). */
+export const discoveryChannel = (gameId) => withNode(LOBBY_HOME_NODE, `cclobby/${gameId}`)
+
+/**
+ * Canal de presencia de una sala concreta (host + guests publican aquí).
+ *
+ * Vive en el proxio DEL HOST, que se lee del propio `roomId`: el roomId es la
+ * instancia del host y las instancias llevan delante el prefijo de su nodo. Así
+ * la sala se hospeda donde está quien la abrió, sin que nadie tenga que
+ * declararlo ni acordarlo.
+ */
+export const roomChannel = (gameId, roomId) => {
+  const prefix = /^[1-9A-Z]{2}/.test(String(roomId || '')) ? String(roomId).slice(0, 2) : null
+  return withNode(prefix, `ccroom/${gameId}/${roomId}`)
+}
 
 /**
  * Construye un sobre.

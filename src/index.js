@@ -11,5 +11,5 @@ export {
   createRepGate, rankRooms, ratePlayer,
   receiptPayload, signReceiptHalf
 } from './reputation.js'
-export { K, discoveryChannel, roomChannel, envelope, parseEnvelope } from './protocol.js'
+export { K, discoveryChannel, roomChannel, setLobbyHomeNode, envelope, parseEnvelope } from './protocol.js'
 export { Emitter, mulberry32, hashSeed, shuffle, normalizeSeats, samePubkey } from './util.js'
