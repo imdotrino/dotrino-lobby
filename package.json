@@ -1,6 +1,6 @@
 {
   "name": "@dotrino/lobby",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Lobby + matchmaking reciclable para juegos del ecosistema Dotrino: salas, asientos, espectadores, motor de turnos autoritativo, reputación y contactos sobre el proxy/identity/reputation compartidos",
   "type": "module",
   "main": "src/index.js",
@@ -31,8 +31,8 @@
     "web-of-trust"
   ],
   "peerDependencies": {
-    "@dotrino/proxy-client": ">=0.1.0",
     "@dotrino/identity": ">=0.5.0",
+    "@dotrino/proxy-client": "^0.10.0",
     "@dotrino/reputation": ">=0.3.0"
   },
   "peerDependenciesMeta": {

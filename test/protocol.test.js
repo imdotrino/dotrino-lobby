@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { envelope, parseEnvelope, discoveryChannel, roomChannel, setLobbyHomeNode, K } from '../src/protocol.js'
+import { envelope, parseEnvelope, discoveryChannel, discoveryChannels, roomChannel, K } from '../src/protocol.js'
 
 test('envelope/parse roundtrip', () => {
   const env = envelope('chess', 'tk1', K.STATE, { foo: 1 }, 5)
@@ -28,23 +28,38 @@ test('parseEnvelope no colisiona con el tag WebRTC', () => {
 const ID_A = '3PQ2QE8YMD8J'
 const ID_B = 'RAEKMT36F81J'
 
-test('nombres de canal: llevan delante el proxio que los hospeda', () => {
-  // La sala vive donde está su host, y eso se lee del propio roomId: el roomId
-  // ES la instancia del host, y las instancias llevan delante el id de su nodo.
+test('la SALA vive en el proxio de su host, leído del propio roomId', () => {
+  // El roomId ES la instancia del host, y las instancias llevan delante el id de
+  // su nodo: nadie tiene que declarar ni acordar dónde vive la sala.
   assert.equal(roomChannel('chess', ID_B + 'abc123'), ID_B + '/ccroom/chess/' + ID_B + 'abc123')
 
   // Un roomId sin id de nodo (dev, o un proxio sin identidad) se queda local.
   assert.equal(roomChannel('chess', 'tk1'), 'ccroom/chess/tk1')
-
-  // Sin nodo de descubrimiento fijado, el canal es local a cada proxio.
-  assert.equal(discoveryChannel('chess'), 'cclobby/chess')
 })
 
-test('el nodo del descubrimiento se fija con el id del proxio elegido', () => {
-  setLobbyHomeNode(ID_A)
-  assert.equal(discoveryChannel('chess'), ID_A + '/cclobby/chess')
-  // Un id mal formado NO se acepta: dejaría un canal que no es de nadie.
-  setLobbyHomeNode('P1')
-  assert.equal(discoveryChannel('chess'), 'cclobby/chess')
-  setLobbyHomeNode(null)
+test('el DESCUBRIMIENTO tiene un canal por nodo: se publica en uno y se lee de todos', () => {
+  // No tiene dueño natural —es un nombre global del ecosistema—, así que en vez
+  // de designar un árbitro cada proxio guarda su lista y quien busca las mezcla.
+  assert.deepEqual(discoveryChannels('chess', [ID_A, ID_B]), [
+    ID_A + '/cclobby/chess',
+    ID_B + '/cclobby/chess'
+  ])
+
+  // Se publica en UNO: el del proxio al que uno está conectado.
+  assert.equal(discoveryChannel('chess', ID_A), ID_A + '/cclobby/chess')
+})
+
+test('el descubrimiento degrada a canal local si no hay ids de nodo', () => {
+  // Proxio sin identidad, o desarrollo: comportamiento de siempre.
+  assert.deepEqual(discoveryChannels('chess', []), ['cclobby/chess'])
+  assert.equal(discoveryChannel('chess', null), 'cclobby/chess')
+  // Un id mal formado no cuenta: dejaría un canal que no es de nadie.
+  assert.deepEqual(discoveryChannels('chess', ['P1']), ['cclobby/chess'])
+})
+
+test('los ids repetidos no generan consultas duplicadas', () => {
+  assert.deepEqual(discoveryChannels('chess', [ID_A, ID_A, ID_B]), [
+    ID_A + '/cclobby/chess',
+    ID_B + '/cclobby/chess'
+  ])
 })

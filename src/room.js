@@ -114,11 +114,21 @@ export class Room extends Emitter {
     this._members.set(this.transport.token, { pubkey: this.myPubkey, name: this.myName, verified: true, lastSeen: clock.now() })
     this._wire()
     // Anunciarse: canal de descubrimiento + canal de presencia de la sala.
-    try { await this.transport.publish(discoveryChannel(this.gameId), { roomName: this.name, gameType: this.gameId }) } catch (_) {}
+    try { await this.transport.publish(this._myDiscoveryChannel(), { roomName: this.name, gameType: this.gameId }) } catch (_) {}
     try { await this.transport.publish(roomChannel(this.gameId, this.roomId)) } catch (_) {}
     this._startHeartbeat()
     this._afterStateChange()
     return this
+  }
+
+  /**
+   * El canal de descubrimiento donde ANUNCIAMOS esta sala: el del proxio al que
+   * estamos conectados. Se publica en uno solo (el propio) y quien busca lee de
+   * todos — así el descubrimiento no necesita un nodo árbitro. Ver protocol.js.
+   */
+  _myDiscoveryChannel () {
+    const t = this.transport
+    return discoveryChannel(this.gameId, (t && (t.node || (t.client && t.client.node))) || null)
   }
 
   // Re-publica la sala periódicamente: las entradas de canal del proxy expiran
@@ -127,7 +137,7 @@ export class Room extends Emitter {
   _startHeartbeat () {
     if (this._heartbeat) clearInterval(this._heartbeat)
     this._heartbeat = setInterval(() => {
-      this.transport.publish(discoveryChannel(this.gameId), { roomName: this.name, gameType: this.gameId }).catch(() => {})
+      this.transport.publish(this._myDiscoveryChannel(), { roomName: this.name, gameType: this.gameId }).catch(() => {})
       this.transport.publish(roomChannel(this.gameId, this.roomId)).catch(() => {})
     }, 10 * 60 * 1000)
     if (this._heartbeat.unref) this._heartbeat.unref()
@@ -792,7 +802,7 @@ export class Room extends Emitter {
         }, 20000)
         if (this._rekeyTimer.unref) this._rekeyTimer.unref()
       }
-      this.transport.publish(discoveryChannel(this.gameId), { roomName: this.name, gameType: this.gameId }).catch(() => {})
+      this.transport.publish(this._myDiscoveryChannel(), { roomName: this.name, gameType: this.gameId }).catch(() => {})
       this.transport.publish(roomChannel(this.gameId, this.roomId)).catch(() => {})
       this._afterStateChange() // re-difundir estado a los miembros vivos
     } else {

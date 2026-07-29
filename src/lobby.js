@@ -3,7 +3,7 @@
 // por reputación, e invita contactos por pubkey (cola offline).
 
 import { Emitter, normalizeSeats } from './util.js'
-import { K, envelope, discoveryChannel } from './protocol.js'
+import { K, envelope, discoveryChannel, discoveryChannels } from './protocol.js'
 import { Transport } from './transport.js'
 import { Room, STATUS } from './room.js'
 import { createRepGate, rankRooms } from './reputation.js'
@@ -28,21 +28,44 @@ export class Lobby extends Emitter {
       if (env.k === K.INFO) { if (this._infoCollector) this._infoCollector(from, env.d && env.d.summary) }
       else if (env.k === K.INVITE) this.emit('invite', { from, ...(env.d || {}) })
     })
-    const dc = discoveryChannel(this.gameId)
+    // Hay un canal de descubrimiento POR NODO (ver protocol.js): el
+    // descubrimiento no tiene dueño natural, así que en vez de designar un nodo
+    // árbitro se publica en el propio y se lee de todos.
+    const esDescubrimiento = (channel) => this._discoveryChannels().includes(channel)
     // Descubrimiento en vivo: requiere observar el canal (watch) para recibir
     // estos eventos sin publicarnos como sala. Si el proxy no soporta watch,
     // _watchDiscovery degrada a no-op y la app sigue con su polling de respaldo.
-    this.transport.on('channel_joined', (channel, token) => { if (channel === dc && token !== this.transport.token) this.emit('rooms-changed', { type: 'joined', token }) })
-    this.transport.on('channel_left', (channel, token) => { if (channel === dc) this.emit('rooms-changed', { type: 'left', token }) })
-    this.transport.on('peer_disconnected', (token, channel) => { if (!channel || channel === dc) this.emit('rooms-changed', { type: 'left', token }) })
+    this.transport.on('channel_joined', (channel, token) => { if (esDescubrimiento(channel) && token !== this.transport.token) this.emit('rooms-changed', { type: 'joined', token }) })
+    this.transport.on('channel_left', (channel, token) => { if (esDescubrimiento(channel)) this.emit('rooms-changed', { type: 'left', token }) })
+    this.transport.on('peer_disconnected', (token, channel) => { if (!channel || esDescubrimiento(channel)) this.emit('rooms-changed', { type: 'left', token }) })
     this.transport.on('reconnect', () => this._watchDiscovery())
     this._watchDiscovery()
   }
 
-  // Observar el canal de descubrimiento para recibir altas/bajas de salas en vivo
-  // (proxy ≥ 0.6.2). Fire-and-forget: no bloquea ni rompe si no está soportado.
+  /** Los nodos que conoce el proxio al que estamos conectados (él incluido). */
+  _knownNodes () {
+    const t = this.transport
+    return (t && (t.knownNodes || (t.client && t.client.knownNodes))) || []
+  }
+
+  /** Un canal de descubrimiento por nodo conocido. */
+  _discoveryChannels () {
+    return discoveryChannels(this.gameId, this._knownNodes())
+  }
+
+  /** El canal donde ANUNCIAMOS: el del proxio al que estamos conectados. */
+  _myDiscoveryChannel () {
+    const t = this.transport
+    return discoveryChannel(this.gameId, (t && (t.node || (t.client && t.client.node))) || null)
+  }
+
+  // Observar los canales de descubrimiento para recibir altas/bajas de salas en
+  // vivo (proxy ≥ 0.6.2). Fire-and-forget: no bloquea ni rompe si no está
+  // soportado. Son N canales, uno por nodo conocido — hoy dos.
   _watchDiscovery () {
-    try { this.transport.watch(discoveryChannel(this.gameId)) } catch (_) {}
+    for (const ch of this._discoveryChannels()) {
+      try { this.transport.watch(ch) } catch (_) {}
+    }
   }
 
   // ── Crear / unir ────────────────────────────────────────────────
@@ -77,8 +100,13 @@ export class Lobby extends Emitter {
   async listRooms (opts = {}) {
     await this.transport.connect()
     const timeout = opts.timeout || 1500
-    let tokens = []
-    try { tokens = await this.transport.list(discoveryChannel(this.gameId)) } catch (_) {}
+    // Se pregunta en CADA nodo y se mezcla. Un nodo que no conteste no rompe la
+    // lista: se ven las salas de los demás, que es justo lo que se gana al no
+    // tener un nodo árbitro.
+    const listas = await Promise.all(this._discoveryChannels().map(
+      (ch) => this.transport.list(ch).catch(() => [])
+    ))
+    const tokens = [...new Set(listas.flat())]
     const others = tokens.filter(t => t && t !== this.transport.token)
     const summaries = await this._gatherInfo(others, timeout)
     if (opts.enrich === false) return summaries

@@ -49,17 +49,28 @@ export const K = {
 /**
  * NODO DUEÑO DE LOS CANALES.
  *
- * Un canal del proxio puede llevar delante el prefijo del nodo que lo hospeda
+ * Un canal del proxio lleva delante el id del nodo que lo hospeda
  * (`<id de 12>/loquesea`). Ese nodo guarda la membresía y los demás le pasan las
- * operaciones. Sin prefijo, cada proxio tiene su propia copia del canal — que es
- * lo que hacía que dos personas en proxios distintos NO se vieran en la misma
- * lista de salas, aunque los mensajes entre ellas sí cruzaran.
+ * operaciones. Sin ese prefijo, cada proxio tiene su propia copia del canal.
  *
- * El **canal de descubrimiento** es uno solo para todo el ecosistema, así que
- * tiene que vivir en un nodo fijo: si cada quien lo publicara en el suyo,
- * habría tantas listas de salas como proxios. Se fija con `setLobbyHomeNode()`
- * pasándole el id del proxio elegido (se lee de `client.node`). Mientras no se
- * fije, el descubrimiento es local a cada proxio.
+ * Los dos canales del lobby resuelven su dueño de forma distinta, y la razón es
+ * que uno tiene dueño natural y el otro no:
+ *
+ *   · LA SALA lo tiene: vive en el proxio de quien la abrió, y eso se LEE del
+ *     propio `roomId` (que es la instancia del host y lleva su id delante). Nadie
+ *     lo declara ni lo acuerda.
+ *
+ *   · EL DESCUBRIMIENTO no: es un nombre global del ecosistema y no lo crea
+ *     nadie en particular. Poner el id del primero que llegue no sirve — el
+ *     segundo host, en otro proxio, crearía otro canal y volverían a ser dos
+ *     listas.
+ *
+ * Para el descubrimiento se eligió NO designar un árbitro: **cada proxio tiene su
+ * lista y quien busca pregunta en todos**. Se publica en uno, se lee de varios.
+ * Así no hay punto único de fallo (si un nodo no contesta, se ven las salas de
+ * los demás) ni nadie que decida dónde vive la lista del ecosistema. El costo es
+ * una consulta por nodo, y lo paga el CLIENTE —no el servidor— así que no
+ * reaparece el fan-out en el proxio, que ya habíamos descartado.
  */
 const NODE_ID_LEN = 12
 // Comprueba la FORMA, no el alfabeto exacto, y es a propósito: el alfabeto lo
@@ -68,20 +79,26 @@ const NODE_ID_LEN = 12
 // el proxio no emite simplemente no va a coincidir con ningún nodo.
 const isNodeId = (s) => new RegExp(`^[1-9A-Z]{${NODE_ID_LEN}}$`).test(String(s || ''))
 
-// Sin valor por defecto: el id de un proxio se DERIVA de su llave, así que no
-// hay ninguno que se pueda escribir aquí de antemano. Mientras no se fije, el
-// canal de descubrimiento es local a cada proxio (comportamiento de siempre).
-let LOBBY_HOME_NODE = null
-
-/** Fija en qué proxio vive el canal de descubrimiento de salas. */
-export function setLobbyHomeNode (nodeId) {
-  LOBBY_HOME_NODE = isNodeId(nodeId) ? nodeId : null
-}
-
 const withNode = (prefix, name) => (prefix ? `${prefix}/${name}` : name)
 
-/** Canal de descubrimiento de salas de un juego (lista instancias de hosts). */
-export const discoveryChannel = (gameId) => withNode(LOBBY_HOME_NODE, `cclobby/${gameId}`)
+/**
+ * Canal de descubrimiento de un juego EN UN NODO concreto.
+ * Sin `nodeId` (proxio sin identidad, o dev) devuelve el nombre pelado, que el
+ * servidor trata como canal local — el comportamiento de siempre.
+ */
+export const discoveryChannel = (gameId, nodeId) =>
+  withNode(isNodeId(nodeId) ? nodeId : null, `cclobby/${gameId}`)
+
+/**
+ * Todos los canales de descubrimiento a consultar: el del propio proxio y el de
+ * cada nodo que conozca. Se deduplica y se deja el propio PRIMERO, porque es el
+ * que va a contestar más rápido y el que se usa para publicar.
+ */
+export function discoveryChannels (gameId, nodeIds = []) {
+  const ids = nodeIds.filter((n, i, a) => isNodeId(n) && a.indexOf(n) === i)
+  if (!ids.length) return [`cclobby/${gameId}`]
+  return ids.map((id) => discoveryChannel(gameId, id))
+}
 
 /**
  * Canal de presencia de una sala concreta (host + guests publican aquí).

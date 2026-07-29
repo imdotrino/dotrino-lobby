@@ -46,6 +46,10 @@ export class Transport extends Emitter {
   }
 
   get token () { return this.proxy ? this.proxy.token : null }
+  /** Id del proxio al que estamos conectados (12 chars, derivado de su llave). */
+  get node () { return this.proxy ? (this.proxy.node || null) : null }
+  /** Ese proxio + los que conoce. Es a quiénes se les pregunta por salas. */
+  get knownNodes () { return (this.proxy && this.proxy.knownNodes) || [] }
   get isReady () { return this._ready && !!this.token }
 
   /** Conecta (si hace falta) e identifica con el vault. Idempotente. */
