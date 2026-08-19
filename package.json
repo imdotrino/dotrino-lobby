@@ -33,7 +33,7 @@
   ],
   "peerDependencies": {
     "@dotrino/identity": ">=0.5.0",
-    "@dotrino/proxy-client": "^0.10.0",
+    "@dotrino/proxy-client": "^0.10.1",
     "@dotrino/reputation": ">=0.3.0"
   },
   "peerDependenciesMeta": {
