@@ -52,9 +52,13 @@ export async function rankRooms (rooms, { reputation, contacts, preferContacts =
     const isContact = !!(contacts && room.hostPubkey && [...contacts].some(c => samePubkey(c, room.hostPubkey)))
     return { ...room, reputation: rep, hostScore: rep && rep.score != null ? rep.score : 0, isContact }
   }))
+  // El desempate por roomId NO es cosmético: sin él, dos salas con el mismo
+  // score quedan en el orden en que contestaron al INFO (una carrera de red que
+  // sale distinta cada vez), así que la lista pública bailaba en cada refresco.
   enriched.sort((a, b) => {
     if (preferContacts && a.isContact !== b.isContact) return a.isContact ? -1 : 1
-    return b.hostScore - a.hostScore
+    if (b.hostScore !== a.hostScore) return b.hostScore - a.hostScore
+    return String(a.roomId || '').localeCompare(String(b.roomId || ''))
   })
   return enriched
 }

@@ -118,7 +118,9 @@ export class Lobby extends Emitter {
     return new Promise((resolve) => {
       const got = new Map()
       let timer = null
-      const done = () => { if (timer) clearTimeout(timer); this._infoCollector = null; resolve([...got.values()]) }
+      // Ordenado por token: el orden de llegada de las respuestas es una carrera
+      // de red y cambia en cada pasada; quien liste tiene que ver siempre lo mismo.
+      const done = () => { if (timer) clearTimeout(timer); this._infoCollector = null; resolve([...got.values()].sort((a, b) => String(a.roomId || '').localeCompare(String(b.roomId || '')))) }
       if (!tokens.length) return done()
       this._infoCollector = (from, summary) => { if (summary) got.set(from, summary); if (got.size >= tokens.length) done() }
       for (const t of tokens) this._sendTo(t, K.INFO_REQUEST, {})
