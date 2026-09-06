@@ -68,21 +68,42 @@ export async function rankRooms (rooms, { reputation, contacts, preferContacts =
 /** Payload canónico que ambos jugadores firman (debe coincidir con el server). */
 export function receiptPayload (a, b, ts) { return { op: 'receipt', a, b, ts } }
 
-/** Firma mi mitad del recibo con el vault. Devuelve la firma base64. */
+/**
+ * Firma MI mitad, y devuelve el paquete entero: `{ sig, signer, chain }`.
+ *
+ * Antes devolvía solo la firma, y con eso el registro no puede comprobar nada: firma el
+ * APARATO y el recibo (o el evento) es entre dos PERSONAS, así que hace falta la cadena que
+ * dice que ese aparato habla por esa identidad. Sin ella, una partida jugada desde el
+ * teléfono no contaba — daba «recibo inválido» o «co-firma inválida».
+ */
+async function firmarMitad (identity, payload) {
+  const signed = await identity.signData(payload)
+  if (typeof signed === 'string') {
+    throw new Error('dotrino-lobby: signData debe devolver { signature, publickey, chain } (vault ≥ 0.84)')
+  }
+  if (!Array.isArray(signed.chain) || !signed.chain.length) {
+    throw new Error('dotrino-lobby: la firma vino sin cadena; el registro no podría comprobar quién firma por ti')
+  }
+  return { sig: signed.signature, signer: signed.publickey, chain: signed.chain }
+}
+
+/** Firma mi mitad del recibo con el vault. → `{ sig, signer, chain }`. */
 export async function signReceiptHalf (identity, a, b, ts) {
-  const signed = await identity.signData(receiptPayload(a, b, ts))
-  return typeof signed === 'string' ? signed : signed.signature
+  return firmarMitad(identity, receiptPayload(a, b, ts))
 }
 
 // ── Evento de indicador derivado co-firmado (p.ej. ELO) ────────────
 /** Payload canónico del evento que ambas partes firman (debe coincidir con el
  *  server de reputation: {op:'event', indicator, scope, a, b, outcome, ts}). */
-export function eventPayload (indicator, scope, a, b, outcome, ts) { return { op: 'event', indicator, scope, a, b, outcome, ts } }
+export function eventPayload (indicator, scope, a, b, outcome, ts, aud) {
+  // PARA QUIÉN es el evento va DENTRO de lo que firman los dos. Ponerlo al publicar no
+  // valdría de nada: la firma no lo cubriría, y el registro rechaza lo que no le nombra.
+  return { op: 'event', aud, indicator, scope, a, b, outcome, ts }
+}
 
-/** Firma mi mitad del evento con el vault. */
-export async function signEventHalf (identity, indicator, scope, a, b, outcome, ts) {
-  const signed = await identity.signData(eventPayload(indicator, scope, a, b, outcome, ts))
-  return typeof signed === 'string' ? signed : signed.signature
+/** Firma mi mitad del evento con el vault. → `{ sig, signer, chain }`. */
+export async function signEventHalf (identity, indicator, scope, a, b, outcome, ts, aud) {
+  return firmarMitad(identity, eventPayload(indicator, scope, a, b, outcome, ts, aud))
 }
 
 /**

@@ -108,7 +108,10 @@ export function fakeIdentity (pubkey, nickname = null) {
   let c = 0
   return {
     me: { publickey: pubkey, nickname },
-    signData: async (data) => ({ signature: 'sig:' + pubkey + ':' + JSON.stringify(data), publickey: pubkey }),
+    // El vault devuelve el PAQUETE: firma, quién firmó y la cadena que dice que ese
+    // aparato habla por esta identidad. Sin la cadena el registro no puede comprobar nada,
+    // y el lobby se niega a co-firmar a medias.
+    signData: async (data) => ({ signature: 'sig:' + pubkey + ':' + JSON.stringify(data), publickey: pubkey, profileId: pubkey, chain: [{ seq: 1, profileId: pubkey }] }),
     makeChallenge: async () => ({ nonce: pubkey + ':n' + (++c) }),
     signChallenge: async (nonce) => ({ nonce, publickey: pubkey, signature: 'cs:' + pubkey }),
     verifyResponse: async (resp) => ({ ok: true, publickey: resp.publickey }),

@@ -18,7 +18,10 @@ async function setup (engine, extra = {}) {
   const hub = new MockHub()
   const idA = fakeIdentity('PKA', 'Ana'), idB = fakeIdentity('PKB', 'Beto')
   const epA = hub.endpoint({ identity: idA }), epB = hub.endpoint({ identity: idB })
-  const base = { gameId: 'g', seats: ['p1', 'p2'], engine, requireVerify: false, start: 'full', ...extra }
+  // El registro solo hace falta para saber PARA QUIÉN se co-firma el evento del indicador
+  // derivado: sin destinatario no se firma nada (el registro lo rechazaría).
+  const reputation = { audience: 'https://rep.dotrino.com' }
+  const base = { gameId: 'g', seats: ['p1', 'p2'], engine, requireVerify: false, start: 'full', reputation, ...extra }
   const lobbyA = await createLobby({ ...base, transport: epA, identity: idA })
   const lobbyB = await createLobby({ ...base, transport: epB, identity: idB })
   return { hub, idA, idB, epA, epB, lobbyA, lobbyB }
@@ -197,6 +200,12 @@ test('resultado co-firmado para ELO (host gana → winner "a", ambos firman)', a
   assert.equal(hr.outcome, 'a', 'el host (a) ganó')
   assert.equal(gr.outcome, 'a')
   assert.ok(hr.coSigned.sigA && hr.coSigned.sigB, 'co-firma completa (ambas mitades)')
+  // Cada mitad va con quién firmó y su cadena: firma el APARATO y el evento es de la
+  // IDENTIDAD, así que sin esto una partida jugada desde el teléfono no contaría.
+  assert.ok(hr.coSigned.signerA && hr.coSigned.chainA?.length, 'la mitad de A, entera')
+  assert.ok(hr.coSigned.signerB && hr.coSigned.chainB?.length, 'la mitad de B, entera')
+  assert.equal(hr.coSigned.data.aud, 'https://rep.dotrino.com', 'y para quién es')
+  assert.deepEqual(gr.coSigned.chainB, hr.coSigned.chainB, 'las dos puntas ven el mismo paquete')
   assert.equal(hr.coSigned.data.op, 'event')
   assert.equal(hr.coSigned.data.indicator, 'elo')
   assert.equal(hr.coSigned.data.scope, 'g')
@@ -261,4 +270,10 @@ test('recibo de partida co-firmado (con verify)', async () => {
   assert.ok(rHost && rHost.sigA && rHost.sigB, 'host tiene recibo completo')
   assert.ok(rGuest && rGuest.sigA && rGuest.sigB, 'guest tiene recibo completo')
   assert.equal(rHost.ts, rGuest.ts, 'mismo ts en ambas mitades')
+  // Y cada mitad con su firmante y su cadena: el recibo respalda una calificación, y el
+  // registro lo rechaza entero si no puede comprobar quién firmó por cada jugador.
+  for (const r of [rHost, rGuest]) {
+    assert.ok(r.signerA && r.chainA?.length, 'la mitad de A, entera')
+    assert.ok(r.signerB && r.chainB?.length, 'la mitad de B, entera')
+  }
 })

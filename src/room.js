@@ -373,7 +373,10 @@ export class Room extends Emitter {
   _hostReceiptSign (from, d) {
     const rec = this._pendingReceiptSig.get(d.receiptId)
     if (!rec || from !== rec.token) return // sólo el destinatario del recibo puede co-firmarlo
-    const full = { a: rec.a, b: rec.b, ts: rec.ts, sigA: rec.sigA, sigB: d.sig }
+    // Sin la mitad completa del otro no hay recibo: se descarta en vez de guardar uno que
+    // el registro va a rechazar (y que haría fallar la calificación entera).
+    if (!d.sig || !d.signer || !Array.isArray(d.chain) || !d.chain.length) { this._pendingReceiptSig.delete(d.receiptId); return }
+    const full = { a: rec.a, b: rec.b, ts: rec.ts, sigA: rec.sigA, signerA: rec.signerA, chainA: rec.chainA, sigB: d.sig, signerB: d.signer, chainB: d.chain }
     this._receipts.set(rec.peerPubkey, full)
     this._pendingReceiptSig.delete(d.receiptId)
     this.emit('receipt', { pubkey: rec.peerPubkey, receipt: full })
@@ -604,10 +607,13 @@ export class Room extends Emitter {
       try {
         const a = this.myPubkey, b = s.pubkey
         const ts = clock.now() + i // ts distinto por par → receiptId no adivinable entre peers
-        const sigA = await signReceiptHalf(this.identity, a, b, ts)
+        const mitadA = await signReceiptHalf(this.identity, a, b, ts)
         const receiptId = `${ts}:${ids[i]}`
-        this._pendingReceiptSig.set(receiptId, { a, b, ts, sigA, peerPubkey: b, token: s.token })
-        this._sendTo(s.token, K.RECEIPT_OFFER, { receiptId, receipt: { a, b, ts, sigA } })
+        // La mitad viaja entera (firma + quién firmó + su cadena): el registro comprueba
+        // que ese aparato habla por ese jugador, no que la llave del jugador firmó.
+        const media = { sigA: mitadA.sig, signerA: mitadA.signer, chainA: mitadA.chain }
+        this._pendingReceiptSig.set(receiptId, { a, b, ts, ...media, peerPubkey: b, token: s.token })
+        this._sendTo(s.token, K.RECEIPT_OFFER, { receiptId, receipt: { a, b, ts, ...media } })
       } catch (_) {}
     }
   }
@@ -628,11 +634,15 @@ export class Room extends Emitter {
         const a = this.myPubkey, b = s.pubkey
         const outcome = winnerPub ? (samePubkey(winnerPub, a) ? 'a' : (samePubkey(winnerPub, b) ? 'b' : 'draw')) : 'draw'
         const ts = clock.now() + i
-        const data = eventPayload(indicator, scope, a, b, outcome, ts)
-        const sigA = await signEventHalf(this.identity, indicator, scope, a, b, outcome, ts)
+        // El destinatario del registro va DENTRO de lo que firman los dos. Sin registro
+        // cableado no hay a quién publicar, así que no se co-firma nada.
+        const aud = this.reputation?.audience
+        if (!aud) continue
+        const data = eventPayload(indicator, scope, a, b, outcome, ts, aud)
+        const mitadA = await signEventHalf(this.identity, indicator, scope, a, b, outcome, ts, aud)
         const resultId = `res:${ts}:${ids[i]}`
-        this._pendingResults.set(resultId, { data, sigA, token: s.token })
-        this._sendTo(s.token, K.RESULT_OFFER, { resultId, data, sigA })
+        this._pendingResults.set(resultId, { data, sigA: mitadA.sig, signerA: mitadA.signer, chainA: mitadA.chain, token: s.token })
+        this._sendTo(s.token, K.RESULT_OFFER, { resultId, data, sigA: mitadA.sig, signerA: mitadA.signer, chainA: mitadA.chain })
       } catch (_) {}
     }
   }
@@ -641,7 +651,8 @@ export class Room extends Emitter {
     const rec = this._pendingResults.get(d.resultId)
     if (!rec || from !== rec.token) return // sólo el destinatario co-firma su resultado
     this._pendingResults.delete(d.resultId)
-    const coSigned = { data: rec.data, sigA: rec.sigA, sigB: d.sig }
+    if (!d.sig || !d.signer || !Array.isArray(d.chain) || !d.chain.length) return
+    const coSigned = { data: rec.data, sigA: rec.sigA, signerA: rec.signerA, chainA: rec.chainA, sigB: d.sig, signerB: d.signer, chainB: d.chain }
     this.emit('result', { indicator: rec.data.indicator, scope: rec.data.scope, a: rec.data.a, b: rec.data.b, outcome: rec.data.outcome, coSigned })
   }
 
@@ -664,9 +675,12 @@ export class Room extends Emitter {
     // Anti-trampa: sólo co-firmo si el resultado del offer coincide con el que YO vi.
     if (this._relativeWinner(a, b, this._public.result) !== outcome) return
     try {
-      const sigB = await signEventHalf(this.identity, indicator, scope, a, b, outcome, ts)
-      this._sendHost(K.RESULT_SIGN, { resultId: d.resultId, sig: sigB })
-      this.emit('result', { indicator, scope, a, b, outcome, coSigned: { data: d.data, sigA: d.sigA, sigB } })
+      // Se co-firma el `data` TAL CUAL vino, destinatario incluido: si el host propusiera
+      // otro registro, se firmaría para ese — así que se comprueba antes de firmar.
+      if (this.reputation?.audience && d.data.aud !== this.reputation.audience) return
+      const mitadB = await signEventHalf(this.identity, indicator, scope, a, b, outcome, ts, d.data.aud)
+      this._sendHost(K.RESULT_SIGN, { resultId: d.resultId, sig: mitadB.sig, signer: mitadB.signer, chain: mitadB.chain })
+      this.emit('result', { indicator, scope, a, b, outcome, coSigned: { data: d.data, sigA: d.sigA, signerA: d.signerA, chainA: d.chainA, sigB: mitadB.sig, signerB: mitadB.signer, chainB: mitadB.chain } })
     } catch (_) {}
   }
 
@@ -732,10 +746,10 @@ export class Room extends Emitter {
     // ...y la contraparte tiene que ser el host real (pubkey conocido por el STATE).
     if (!samePubkey(peer, this._public.hostPubkey)) return
     try {
-      const sigB = await signReceiptHalf(this.identity, a, b, ts)
-      const full = { a, b, ts, sigA: d.receipt.sigA, sigB }
+      const mitadB = await signReceiptHalf(this.identity, a, b, ts)
+      const full = { a, b, ts, sigA: d.receipt.sigA, signerA: d.receipt.signerA, chainA: d.receipt.chainA, sigB: mitadB.sig, signerB: mitadB.signer, chainB: mitadB.chain }
       this._receipts.set(peer, full)
-      this._sendHost(K.RECEIPT_SIGN, { receiptId: d.receiptId, sig: sigB })
+      this._sendHost(K.RECEIPT_SIGN, { receiptId: d.receiptId, sig: mitadB.sig, signer: mitadB.signer, chain: mitadB.chain })
       this.emit('receipt', { pubkey: peer, receipt: full })
     } catch (_) {}
   }
