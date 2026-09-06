@@ -111,10 +111,8 @@ export class Transport extends Emitter {
     const me = this.identity.me
     const publickey = me && me.publickey
     if (!publickey) return
-    const data = { op: 'identify', publickey, token: this.proxy.token, ts: clock.now() }
-    const signed = await this.identity.signData(data)
-    const signature = typeof signed === 'string' ? signed : signed.signature
-    await this.proxy.identify({ data, signature })
+    // El sobre lo arma el pilar (`identifyAs`), que le pone el destinatario.
+    await this.proxy.identifyAs({ publickey, sign: (d) => this.identity.signData(d) })
   }
 
   /** Demultiplexor: registra un handler para un gameId. Devuelve desuscriptor. */
