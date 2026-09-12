@@ -38,8 +38,8 @@ export class Room extends Emitter {
     // Estado autoritativo del host (campos de trabajo).
     this.engine = config.engineSpec ? createEngine(config.engineSpec) : null
     // El guest necesita la pubkey del host ANTES de hablar: sin ella no puede sellar.
-    // Viene del resumen de la lista de salas o de la invitación; si no, se pregunta
-    // con la presentación (K.HI).
+    // Viene del resumen de la lista de salas o de la invitación; si no, se la pregunta
+    // al saludo del transporte (`helloTo`).
     this.hostPubkey = role === 'host' ? this.myPubkey : (config.hostPubkey || null)
     this._seats = {}                // id → { id, pubkey, token, name, ready, status, disconnectAt }
     this._members = new Map()       // token → { pubkey, name, verified, nonce, lastSeen }
@@ -62,11 +62,10 @@ export class Room extends Emitter {
     this._lastSeq = -1
     this._joinTimer = null
     this._joinAttempts = 0
-    this._introTimer = null
-    this._introAttempts = 0
     this._hostLostTimer = null
 
     this._unsub = []
+    this._left = false
     if (role === 'host') this._initSeats()
   }
 
@@ -260,12 +259,12 @@ export class Room extends Emitter {
 
   /** Salir de la sala y liberar recursos. */
   async leave () {
+    this._left = true
     for (const off of this._unsub) { try { off() } catch (_) {} }
     this._unsub = []
     for (const t of this._graceTimers.values()) clearTimeout(t)
     this._graceTimers.clear()
     if (this._joinTimer) clearTimeout(this._joinTimer)
-    if (this._introTimer) clearTimeout(this._introTimer)
     if (this._rekeyTimer) clearTimeout(this._rekeyTimer)
     if (this._hostLostTimer) clearTimeout(this._hostLostTimer)
     if (this._heartbeat) clearInterval(this._heartbeat)
@@ -287,10 +286,9 @@ export class Room extends Emitter {
   _onHostMessage (from, env) {
     const d = env.d || {}
     switch (env.k) {
-      case K.HI: this._hostHi(from, d); break
       case K.HELLO: this._hostHello(from, d); break
       case K.REQUEST_STATE: this._sendStateTo(from); break
-      case K.INFO_REQUEST: this._sendInfoTo(from, d.pubkey); break
+      case K.INFO_REQUEST: this._sendInfoTo(from); break
       case K.VERIFY_RESP: this._hostVerifyResp(from, d); break
       case K.SEAT_TAKE: this._hostSeatTake(from, d); break
       case K.SEAT_LEAVE: if (this._vacateByToken(from, { voluntary: true })) this._afterSeatChange(); break
@@ -304,16 +302,6 @@ export class Room extends Emitter {
       case K.PING: this._touch(from); this._sendTo(from, K.PONG, { ts: d.ts }); break
       default: break
     }
-  }
-
-  /**
-   * LA PRESENTACIÓN, lado del host. Llega en claro porque el que pregunta todavía no
-   * sabe a quién sellarle; lo único que trae es su publickey, que el proxio ya tenía
-   * atada a su conexión desde `identify`. La respuesta ya va sellada.
-   */
-  _hostHi (from, d) {
-    if (!d || !d.pubkey || !this.myPubkey) return
-    this._sendTo(from, K.HI_OK, { pubkey: this.myPubkey }, undefined, d.pubkey)
   }
 
   _hostSeatTake (from, d) {
@@ -715,7 +703,6 @@ export class Room extends Emitter {
     if (env.k === K.HOST_REKEY) { this._guestRekey(from, d); return } // viene del token nuevo
     if (from !== this._hostToken) return // sólo confiamos en el host
     switch (env.k) {
-      case K.HI_OK: this._guestHiOk(d); break
       case K.STATE: this._guestState(d, env.s); break
       case K.EVENT: this._guestEvent(d); break
       case K.VERIFY_CHALLENGE: this._guestVerify(d); break
@@ -799,49 +786,31 @@ export class Room extends Emitter {
   _clearHostLost () { if (this._hostLostTimer) { clearTimeout(this._hostLostTimer); this._hostLostTimer = null } }
 
   /**
-   * Ya sabemos a quién le estamos hablando: a partir de aquí todo va sellado.
-   * Lo que dice el host de sí mismo NO se cree a ciegas — el STATE trae su pubkey y
-   * el guest ya comprobaba antes que los recibos y resultados vengan de ella.
+   * SALUDAR AL HOST. El saludo de la sala lleva el apodo, así que va SELLADO, y sellar
+   * exige saber a qué identidad. Si no nos la dieron (un enlace compartido solo trae el
+   * token), se la pregunta al TRANSPORTE, que para eso tiene su saludo: `helloTo` dice
+   * quién soy y el otro contesta quién es. Aquí no se inventa ninguna presentación.
    */
-  _guestHiOk (d) {
-    if (this.hostPubkey || !d || !d.pubkey) return
-    this.hostPubkey = d.pubkey
-    if (this._introTimer) { clearTimeout(this._introTimer); this._introTimer = null }
-    this._sendHelloWithRetry()
-  }
-
-  /**
-   * SALUDAR AL HOST. El saludo lleva el apodo, así que va SELLADO, y sellar exige saber
-   * a qué identidad. Si no nos la dieron (un enlace compartido solo trae el token), se
-   * pregunta primero: eso es todo lo que hace la presentación.
-   */
-  _greetHost () {
-    if (this.hostPubkey) this._sendHelloWithRetry()
-    else this._sendIntroWithRetry()
-  }
-
-  _sendIntroWithRetry () {
-    if (!this.myPubkey) {
-      console.warn('[lobby] cannot introduce myself without an identity')
-      this.emit('closed', { reason: 'no-identity' })
-      return
-    }
-    const send = () => {
-      this._introTimer = null
-      try { this.transport.sendIntro(this._hostToken || this.roomId, this._env(K.HI, { pubkey: this.myPubkey })) } catch (e) { console.warn('[lobby] intro failed:', e && e.message) }
-      this._introAttempts++
-      if (this.hostPubkey) return
-      if (this._introAttempts < 5) {
-        this._introTimer = setTimeout(send, 1200)
-        if (this._introTimer.unref) this._introTimer.unref()
-      } else {
-        // Se dice en voz alta: sin la identidad del host no hay nada que sellar y la
-        // sala no puede empezar. Callarlo es el fallo mudo de siempre.
-        console.warn('[lobby] the host never said which identity it is: nothing can be sealed to it')
-        this.emit('closed', { reason: 'no-host-identity' })
+  async _greetHost () {
+    const token = this._hostToken || this.roomId
+    if (!this.hostPubkey) {
+      for (let intento = 0; intento < 4 && !this.hostPubkey; intento++) {
+        try {
+          this.hostPubkey = await this.transport.peerIdentity(token, { timeout: 1500 })
+        } catch (e) {
+          if (this._left) return
+          if (intento === 3) {
+            // Se dice en voz alta: sin saber quién es el host no hay a quién sellarle y
+            // la sala no puede empezar. Callarlo es el fallo mudo de siempre.
+            console.warn(`[lobby] nobody said whose token ${token} is (${e && e.code}): nothing can be sealed to it`)
+            this.emit('closed', { reason: 'no-host-identity' })
+            return
+          }
+        }
       }
     }
-    send()
+    if (this._left) return
+    this._sendHelloWithRetry()
   }
 
   _sendHelloWithRetry () {
@@ -943,9 +912,9 @@ export class Room extends Emitter {
     this._sendTo(token, K.STATE, this._snapshot(seat), this._seq)
   }
 
-  // El resumen lleva el nombre de la sala y los apodos de quienes están dentro, así
-  // que va sellado a quien preguntó (su pubkey viene en el INFO_REQUEST).
-  _sendInfoTo (token, askerPubkey) { this._sendTo(token, K.INFO, { summary: this._summary() }, undefined, askerPubkey) }
+  // El resumen lleva el nombre de la sala y los apodos de quienes están dentro, así que
+  // va sellado a quien preguntó — que se sabe quién es porque saludó antes de preguntar.
+  _sendInfoTo (token) { this._sendTo(token, K.INFO, { summary: this._summary() }) }
 
   _summary () {
     const seatsArr = this.config.seats.ids.map(id => ({ id, status: this._seats[id].status, name: this._seats[id].name }))
@@ -1018,10 +987,20 @@ export class Room extends Emitter {
   get _gate () { return this.config.gate || null }
   _env (kind, data, seq) { return envelope(this.gameId, this.roomId, kind, data, seq) }
 
-  /** Quién está detrás de un token: el host lo sabe por sus miembros; el guest, del host. */
+  /**
+   * Quién está detrás de un token. Tres fuentes, y ninguna es el proxio diciendo por su
+   * cuenta quién es quién: lo que la sala ya sabe (sus miembros, o que es el host) y lo
+   * que el otro dijo de sí mismo en el saludo del transporte.
+   */
   _peerPubkeyFor (token) {
-    if (this.isHost) { const m = this._members.get(token); return (m && m.pubkey) || null }
-    return this.hostPubkey || this._public.hostPubkey || null
+    if (this.isHost) {
+      const m = this._members.get(token)
+      if (m && m.pubkey) return m.pubkey
+    } else {
+      const h = this.hostPubkey || this._public.hostPubkey
+      if (h) return h
+    }
+    return this.transport.pubkeyOfToken ? this.transport.pubkeyOfToken(token) : null
   }
 
   /**
@@ -1031,11 +1010,6 @@ export class Room extends Emitter {
    */
   _sendTo (token, kind, data, seq, peerPubkey) {
     const peer = peerPubkey || this._peerPubkeyFor(token)
-    if (!peer) {
-      console.warn(`[lobby] not sending ${kind}: unknown identity behind token ${token}`)
-      this.emit('event', { event: 'seal-failed', data: { kind, code: 'unknown-peer' } })
-      return
-    }
     this.transport.sendSealedTo(token, this._env(kind, data, seq), peer).catch((e) => {
       // Por `code`, nunca por la frase: `no-encpub` (el otro lado es viejo y no anuncia
       // llave) no se arregla igual que `encpub-unverified` (llegó una llave que esa

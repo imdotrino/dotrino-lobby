@@ -12,9 +12,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createLobby } from '../src/lobby.js'
-import { K, isIntroKind } from '../src/protocol.js'
+import { K } from '../src/protocol.js'
 import * as publico from '../src/index.js'
-import { MockHub, fakeIdentity, tick } from './helpers.js'
+import { MockHub, fakeIdentity, tick, HELLO_TAG } from './helpers.js'
 
 const counter = {
   initialState: { scores: {}, target: 3 },
@@ -42,14 +42,16 @@ const legible = (hub) => hub.plaintext.map(p => JSON.stringify(p)).join('\n')
 // 0. La puerta del paquete
 // ───────────────────────────────────────────────────────────────────────────
 
-// `src/index.d.ts` declaraba `isIntroKind`/`INTRO_KINDS` y `src/index.js` no los
-// exportaba: los tipos decían que sí y en marcha era `undefined`. Lo cazó una prueba
-// contra el paquete ya publicado, que es tarde.
-test('el paquete exporta lo que dice exportar sobre el sellado', () => {
-  assert.equal(typeof publico.isIntroKind, 'function')
-  assert.ok(publico.INTRO_KINDS instanceof Set)
-  assert.equal(publico.isIntroKind(publico.K.HI), true)
-  assert.equal(publico.isIntroKind(publico.K.CHAT), false)
+// `src/index.d.ts` llegó a declarar cosas que `src/index.js` no exportaba: los tipos
+// decían que sí y en marcha era `undefined`. Lo cazó una prueba contra el paquete ya
+// publicado, que es tarde — así que ahora se mira la puerta del paquete, no solo los
+// módulos de dentro.
+test('el paquete exporta lo que dice exportar', () => {
+  for (const nombre of ['createLobby', 'Lobby', 'Room', 'Transport', 'createEngine', 'K', 'envelope', 'parseEnvelope', 'roomChannel', 'discoveryChannel']) {
+    assert.ok(publico[nombre], `falta el export ${nombre}`)
+  }
+  assert.equal(typeof publico.createLobby, 'function')
+  assert.equal(publico.K.CHAT, 'chat')
 })
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -90,27 +92,28 @@ test('partida completa: por el proxio no pasa ni el chat, ni las jugadas, ni los
 })
 
 // ───────────────────────────────────────────────────────────────────────────
-// 2. Lo único que va en claro es la presentación, y solo lleva una publickey
+// 2. De esta librería no sale NADA sin sellar; lo único en claro es el saludo
+//    del transporte, que lleva llaves públicas
 // ───────────────────────────────────────────────────────────────────────────
 
-test('lo único sin sellar es la presentación, y no lleva nada del usuario', async () => {
+test('de la sala no sale nada sin sellar: en claro solo el saludo del transporte', async () => {
   const hub = new MockHub()
   const { lobbyA, lobbyB } = await dosLobbies(hub)
   const host = await lobbyA.createRoom({ name: 'Sala', playerName: 'Ana' })
-  await lobbyB.listRooms({ timeout: 60 })
+  await lobbyB.listRooms({ timeout: 200 })
   const guest = await lobbyB.joinRoom(host.roomId, { playerName: 'Beto' })
   await tick()
   guest.takeSeat('p2'); await tick()
 
   const claros = hub.plaintext
-  assert.ok(claros.length > 0, 'la presentación existe (alguien tiene que hablar primero)')
-  for (const env of claros) {
-    assert.ok(isIntroKind(env.k), `en claro solo va la presentación, no ${env.k}`)
-    // El sobre entero: el namespace del juego, la sala a la que se pregunta y UNA
-    // publickey. Nada más — y la publickey ya la tiene el proxio desde el `identify`.
-    assert.deepEqual(Object.keys(env.d).sort(), ['pubkey'], 'la presentación solo lleva una publickey')
-    assert.ok(env.d.pubkey === 'PKA' || env.d.pubkey === 'PKB')
+  assert.ok(claros.length > 0, 'alguien tiene que decir quién es antes de poder sellar')
+  for (const p of claros) {
+    assert.equal(p.t, HELLO_TAG, `en claro solo el saludo del transporte, no ${JSON.stringify(p).slice(0, 60)}`)
+    // El saludo entero: una llave pública, que el proxio ya tiene desde el `identify`.
+    assert.deepEqual(Object.keys(p).sort(), ['publickey', 't'])
+    assert.ok(p.publickey === 'PKA' || p.publickey === 'PKB')
   }
+  assert.equal(hub.plaintextNoHello.length, 0, 'ni un sobre de la sala en claro')
 })
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -203,6 +206,7 @@ test('sin llave del otro lado no se manda nada: falla con su code, no cae a text
   hub.encPubs.delete('PKA')
 
   const guest = await lobbyB.joinRoom(host.roomId, { playerName: 'Beto', hostPubkey: 'PKA' })
+  await tick()
   const fallos = []
   guest.on('event', (e) => { if (e.event === 'seal-failed') fallos.push(e.data) })
   guest.chat('esto no debería salir')
@@ -228,7 +232,5 @@ test('el resumen de la sala (nombre, apodos, asientos) llega sellado a quien pre
   assert.equal(rooms[0].hostPubkey, 'PKA', 'el resumen trae la identidad del host')
 
   assert.equal(legible(hub).includes('Mesa de Ana'), false, 'el nombre de la sala no viaja en claro')
-  // Ojo con comparar por substring: 'info.req' (la pregunta, que SÍ va en claro)
-  // contiene 'info' (la respuesta, que no). Se compara el tipo, no el texto.
-  for (const env of hub.plaintext) assert.notEqual(env.k, K.INFO, 'el resumen nunca sale en claro')
+  assert.equal(hub.plaintextNoHello.length, 0, 'ni la pregunta ni el resumen salen en claro')
 })

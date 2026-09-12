@@ -13,7 +13,7 @@ matchmaking filtrado por reputación y recibo de partida co-firmado.**
 Está construido **sobre** los pilares compartidos — no reimplementa transporte ni
 identidad:
 
-- `@dotrino/proxy-client` **≥ 0.21.0** — transporte (canales, `identify`,
+- `@dotrino/proxy-client` **≥ 0.22.0** — transporte (canales, `identify`,
   **sellado extremo a extremo**, WebRTC). **Una sola conexión**, reutilizable.
 - `@dotrino/identity` — vault (firma, challenge/response,
   **contactos**).
@@ -25,7 +25,7 @@ vanilla o nativo-vía-WebView.
 
 ---
 
-## Todo lo dirigido va SELLADO (desde 0.8.0)
+## Todo lo dirigido va SELLADO (desde 0.8.0; con `requireSealed` desde 0.9.0)
 
 El proxio **no cifra**: `send`/`sendByPubkey` mandan el payload tal cual y lo lee quien
 opera el servidor — y el de producción corre en un VPS alquilado. Hasta 0.7.0 esta
@@ -36,34 +36,35 @@ Desde 0.8.0:
 
 - **de salida**, todo lo de la sala va sellado (`sendSealedTo` por token, `sendSealed`
   por pubkey para invitaciones y re-clave). No hay ninguna función que mande en claro;
-- **de entrada**, lo que llega sin sellar **se tira**. Sellar solo de salida no sirve de
-  nada: quien acepta texto en claro se salta el sellado entero, y alguien que nunca leyó
-  nada podría colar una jugada falsa;
+- **de entrada**, lo que llega sin sellar **se tira**: el cliente arranca con
+  `requireSealed: true`, que corta en las dos direcciones. Sellar solo de salida no sirve
+  de nada: quien acepta texto en claro se salta el sellado entero, y alguien que nunca
+  leyó nada podría colar una jugada falsa;
 - **hace falta identidad**. `createLobby` sin bóveda lanza `code: 'no-identity'`: sellar
   es sellar *a alguien*, y antes esto degradaba a jugar en claro.
 
-### La presentación, que es lo único que va sin sellar
+### Cómo se sabe a quién sellarle: el saludo es del TRANSPORTE
 
 Sellar exige la llave de cifrado del otro, y el pilar la averigua **por su publickey**.
 Pero el proxio entrega por **token**, y un token no dice de quién es: del canal de
-descubrimiento solo salen tokens. En una sala de desconocidos nadie sabe todavía a quién
-le está hablando, así que alguien tiene que hablar primero — y el primero no puede sellar.
+descubrimiento solo salen tokens. Ese tramo lo cierra `@dotrino/proxy-client` **≥ 0.22.0**
+con `helloTo`: una trama de **control del transporte** —hermana de la señalización de
+WebRTC— que dice «este token es esta identidad», lleva solo una llave pública (la misma
+que el proxio ya tiene atada a esa conexión desde `identify`), no sube a la app y
+`requireSealed` no la para. El otro contesta la suya una vez.
 
-Esa primera frase es la **presentación**, y **no lleva nada del usuario: solo una
-publickey**, que es justo el dato que el proxio ya tiene de los dos desde `identify`. Son
-dos mensajes (`K.HI` al entrar, `K.INFO_REQUEST` al listar salas) y sus respuestas **ya
-van selladas**. A partir de ahí, todo.
+**Aquí se usa, no se reimplementa.** El lobby saluda (`transport.peerIdentity(token)`),
+espera a saber con quién habla, y a partir de ahí todo va sellado. Si te descubres
+escribiendo un mensaje de presentación en el protocolo de esta librería, eso es del
+transporte.
 
-Si la app ya sabe quién es el host, ni eso: `joinRoom(roomId, { hostPubkey })` sella desde
-el primer mensaje. La pubkey viene en el resumen de `listRooms` (`hostPubkey`) y en la
-invitación (`from`); `quickMatch` la pasa sola.
-
-> Cuando `@dotrino/proxy-client` aprenda a atar tokens a identidades por su cuenta
-> (el saludo del transporte), esta presentación se borra y se usa la suya: es del
-> transporte, no del lobby.
+Y si la app ya sabe quién es el host, ni el saludo hace falta:
+`joinRoom(roomId, { hostPubkey })` sella desde el primer mensaje. La pubkey viene en el
+resumen de `listRooms` (`hostPubkey`) y en la invitación (`from`); `quickMatch` la pasa
+sola.
 
 **Lo que esto NO resuelve, dicho en voz alta.** Quien presenta a dos desconocidos es el
-proxio: del canal salen tokens, y la identidad del host la dice él mismo. Un proxio
+proxio: del canal salen tokens, y la identidad del otro la dice él mismo en el saludo. Un proxio
 hostil podría poner la suya en medio y leer la partida — eso no lo arregla ningún
 sellado, lo arregla **conocer la pubkey del otro por fuera**: una invitación de un
 contacto (`from`), un enlace que la lleve, o un acta compartida. Lo que sí queda cerrado

@@ -13,19 +13,22 @@
 // cual, así que el chat, las jugadas y los nombres de los jugadores los leía quien
 // opera el proxio — y el de producción corre en un VPS alquilado.
 //
-// Por eso esta clase NO EXPONE NINGÚN ENVÍO EN CLARO. Solo hay tres salidas:
+// Por eso esta clase NO EXPONE NINGÚN ENVÍO EN CLARO. Solo hay dos salidas:
 //   · `sendSealedTo(token, env, peerPubkey)` — lo de la sala, por token
 //   · `sendSealedByPubkey(pubkeys, env)`     — invitaciones y re-clave, por pubkey
-//   · `sendIntro(token, env)`                — la presentación, que solo lleva una
-//     publickey y no se puede sellar todavía (ver INTRO_KINDS en protocol.js)
 //
-// Y de ENTRADA se tira todo lo que no venga sellado salvo esos dos mensajes de
-// presentación: sellar solo de salida no sirve de nada, porque quien acepta texto
-// en claro se salta el sellado entero y cualquiera podría colar una jugada falsa.
+// Y el cliente arranca con `requireSealed: true`, que corta en las DOS direcciones:
+// sellar solo de salida no sirve de nada, porque quien acepta texto en claro se salta
+// el sellado entero y cualquiera podría colar una jugada falsa sin haber leído nunca
+// nada.
+//
+// Para sellarle a un token hay que saber de quién es, y eso lo resuelve el TRANSPORTE
+// con su saludo (`helloTo`, pilar ≥ 0.22.0): una trama de control que lleva solo una
+// llave pública y no sube a la app. Aquí se usa; no se reimplementa.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Emitter } from './util.js'
-import { parseEnvelope, isIntroKind } from './protocol.js'
+import { parseEnvelope } from './protocol.js'
 
 /**
  * La MARCA de nuestros sobres (`identitySealing`). Las dos puntas son esta misma
@@ -128,6 +131,9 @@ export class Transport extends Emitter {
    * lo que alguien nos hubiera sellado mientras (las invitaciones esperan 24 h).
    */
   async _wireSealing (mod) {
+    // Esto va SIEMPRE, incluso si otro módulo ya configuró el cliente: `requireSealed`
+    // solo se puede encender, y es la mitad que no se puede perder por el camino.
+    this.proxy.updateConfig({ requireSealed: true })
     if (this.proxy.myEncPub && this.proxy.sealing) { this._myEncPub = this.proxy.myEncPub; return }
     if (typeof mod.identitySealing !== 'function') {
       throw errorCon('[lobby] @dotrino/proxy-client >= 0.21.0 required (identitySealing)', 'no-sealing-support')
@@ -161,11 +167,11 @@ export class Transport extends Emitter {
     this.proxy.on('message', (from, payload, meta) => {
       const env = parseEnvelope(payload)
       if (!env) return
-      // LO QUE NO VIENE SELLADO SE TIRA. Las dos únicas excepciones son los mensajes
-      // de presentación, que solo llevan una publickey (ver INTRO_KINDS): aceptar
-      // texto en claro sería dejar que cualquiera cuele una jugada o un chat falso
-      // sin haber leído nunca nada.
-      if (!(meta && meta.sealed) && !isIntroKind(env.k)) {
+      // LO QUE NO VIENE SELLADO SE TIRA. Con `requireSealed` el pilar ya no entrega
+      // texto en claro, así que esto es el cinturón además del tirante: el cliente es
+      // un singleton que comparte la app, y si algún día alguien lo crea sin exigirlo,
+      // por aquí no entra igual.
+      if (!(meta && meta.sealed)) {
         console.warn(`[lobby] dropped an unsealed message (kind=${env.k}) from ${from}`)
         return
       }
@@ -178,6 +184,9 @@ export class Transport extends Emitter {
 
     // Eventos de presencia (no namespaced; las salas filtran por canal).
     this.proxy.on('peer_disconnected', (token, channel) => this.emit('peer_disconnected', token, channel || null))
+    // «Ese token es esta identidad», del saludo del transporte. Es lo que permite
+    // sellarle a alguien a quien solo conocíamos por su dirección.
+    this.proxy.on('peer_identity', (token, publickey) => this.emit('peer_identity', token, publickey))
     this.proxy.on('channel_joined', (channel, token) => this.emit('channel_joined', channel, token))
     this.proxy.on('channel_left', (channel, token) => this.emit('channel_left', channel, token))
     this.proxy.on('disconnect', (d) => this.emit('disconnect', d))
@@ -213,20 +222,15 @@ export class Transport extends Emitter {
 
   /**
    * Envío SELLADO por token, que es como hablan los de una sala (y lo único que puede
-   * subir a WebRTC). El token es una dirección del proxio y no dice de quién es: quien
-   * sabe qué identidad hay detrás es la sala —lo aprendió del saludo, de la lista o de
-   * la invitación— y por eso se pasa aquí.
+   * subir a WebRTC). `peerPubkey` es opcional: si no se pasa, lo resuelve el saludo del
+   * transporte. Si no se puede sellar, LANZA — no hay camino de vuelta al texto claro.
    *
-   * Si no se puede sellar, LANZA: no hay camino de vuelta al texto en claro.
    * @param {string} token
    * @param {object} env sobre de protocol.js
-   * @param {string} peerPubkey publickey de quien está detrás del token
+   * @param {string} [peerPubkey] identidad detrás del token, cuando la sala ya la sabe
    */
   sendSealedTo (token, env, peerPubkey) {
-    if (!peerPubkey) {
-      return Promise.reject(errorCon('[lobby] sendSealedTo: unknown identity behind that token', 'unknown-peer'))
-    }
-    return this.proxy.sendSealedTo(token, env, { peerPubkey })
+    return this.proxy.sendSealedTo(token, env, peerPubkey ? { peerPubkey } : undefined)
   }
 
   /** Envío SELLADO por pubkey estable (cola offline 24 h). Invitaciones y re-clave. */
@@ -234,16 +238,39 @@ export class Transport extends Emitter {
     return this.proxy.sendSealed(pubkeys, env)
   }
 
+  // ── ¿De quién es este token? ───────────────────────────────────
+
+  /** Lo que el saludo dejó apuntado, o `null` si nadie lo ha dicho todavía. */
+  pubkeyOfToken (token) {
+    return (this.proxy && typeof this.proxy.pubkeyOfToken === 'function') ? this.proxy.pubkeyOfToken(token) : null
+  }
+
+  /** Decirle a un token quién soy. El otro contesta el suyo una vez (pilar ≥ 0.22.0). */
+  helloTo (token) { this.proxy.helloTo(token) }
+
   /**
-   * LA PRESENTACIÓN, el único envío que sale sin sellar. Solo acepta los dos mensajes
-   * de INTRO_KINDS, que llevan una publickey y nada más — el mismo dato que el proxio
-   * ya tiene de nosotros desde `identify`.
+   * SABER CON QUIÉN SE HABLA ANTES DE HABLAR. Saluda y espera a que conteste quién es.
+   * Es lo único que separa a dos desconocidos de poder sellarse: sin esto se sabe la
+   * dirección y ninguna identidad.
+   *
+   * Si nadie contesta, LANZA con `no-peer-identity` — no hay camino que acabe mandando
+   * en claro «porque no se supo a quién».
    */
-  sendIntro (token, env) {
-    if (!isIntroKind(env && env.k)) {
-      throw errorCon(`[lobby] sendIntro refuses to send "${env && env.k}" in the clear`, 'unsealed')
-    }
-    this.proxy.send(token, env)
+  peerIdentity (token, { timeout = 2000 } = {}) {
+    const ya = this.pubkeyOfToken(token)
+    if (ya) return Promise.resolve(ya)
+    return new Promise((resolve, reject) => {
+      const off = this.on('peer_identity', (t, pk) => {
+        if (t !== token) return
+        clearTimeout(timer); off(); resolve(pk)
+      })
+      const timer = setTimeout(() => {
+        off()
+        reject(errorCon(`[lobby] ${token} never said whose it is`, 'no-peer-identity'))
+      }, timeout)
+      if (timer.unref) timer.unref()
+      try { this.helloTo(token) } catch (e) { clearTimeout(timer); off(); reject(e) }
+    })
   }
 
   // ── Canales ────────────────────────────────────────────────────

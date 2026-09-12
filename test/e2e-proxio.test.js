@@ -12,7 +12,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { WebSocketProxyClient } from '@dotrino/proxy-client'
 import { createLobby } from '../src/lobby.js'
-import { K, isIntroKind, parseEnvelope } from '../src/protocol.js'
+import { K, parseEnvelope } from '../src/protocol.js'
 import { startProxio } from './proxio.mjs'
 import { bovedaDeMentira } from './boveda.mjs'
 
@@ -104,21 +104,27 @@ test('partida completa por el cable: el proxio no puede leer nada del usuario', 
 
   // ── LO QUE VIO EL PROXIO ────────────────────────────────────────────────
   const visto = proxio.text()
-  for (const secreto of [SALA, CHAT, 'Ana-8812', 'Beto-5540', 'scores', K.ACTION, K.CHAT, K.STATE, K.INVITE, K.HELLO]) {
+  // Entre comillas: el tipo exacto, no un trozo suelto. `K.HELLO` ('hello') aparecería
+  // dentro de `__cc_hello__`, que es la trama de control del transporte y sí va en claro.
+  for (const secreto of [SALA, CHAT, 'Ana-8812', 'Beto-5540', 'scores', `"${K.ACTION}"`, `"${K.CHAT}"`, `"${K.STATE}"`, `"${K.INVITE}"`, `"${K.HELLO}"`]) {
     assert.equal(visto.includes(secreto), false, `el proxio no puede ver «${secreto}»`)
   }
 
-  // Y de lo dirigido, lo único legible es la presentación — con una publickey dentro.
+  // Y de lo dirigido, lo único legible es el SALUDO DEL TRANSPORTE: una llave pública,
+  // que el proxio ya tenía atada a esa conexión desde el `identify`.
   const sobres = dirigidos(proxio)
   assert.ok(sobres.length > 12, `hubo tráfico de verdad (${sobres.length} mensajes)`)
   let sellados = 0
   for (const s of sobres) {
+    if (s && s.t === '__cc_hello__') {
+      assert.deepEqual(Object.keys(s).sort(), ['publickey', 't'], 'el saludo no lleva nada más')
+      continue
+    }
     const env = parseEnvelope(s)
-    if (!env) { sellados++; continue } // no se puede ni parsear: está sellado
-    assert.ok(isIntroKind(env.k), `en claro solo la presentación, no ${env.k}`)
-    assert.deepEqual(Object.keys(env.d).sort(), ['pubkey'])
+    assert.equal(env, null, `esto se puede leer y no debería: ${JSON.stringify(s).slice(0, 80)}`)
+    sellados++
   }
-  assert.ok(sellados > 10, `y casi todo va sellado (${sellados} de ${sobres.length})`)
+  assert.ok(sellados > 10, `y todo lo de la sala va sellado (${sellados} de ${sobres.length})`)
 })
 
 test('entrar por enlace (sin saber quién es el host): la presentación lo resuelve por el cable', async (t) => {
@@ -132,7 +138,7 @@ test('entrar por enlace (sin saber quién es el host): la presentación lo resue
   const guest = await beto.lobby.joinRoom(host.roomId, { playerName: 'Beto' })
 
   await hasta(() => guest.state && guest.state.hostPubkey)
-  assert.equal(guest.hostPubkey, ana.identity.me.publickey, 'la presentación dice quién es el host')
+  assert.equal(guest.hostPubkey, ana.identity.me.publickey, 'el saludo del transporte dice quién es el host')
 
   host.takeSeat('p1')
   await hasta(() => guest.seats && guest.seats.p1 && guest.seats.p1.occupied)
@@ -140,12 +146,10 @@ test('entrar por enlace (sin saber quién es el host): la presentación lo resue
   await hasta(() => host.status === 'playing' && guest.status === 'playing')
   assert.equal(guest.mySeat, 'p2')
 
-  // La presentación es lo único en claro, y no dice nada del usuario.
+  // El saludo es lo único en claro, y no dice nada del usuario.
   for (const s of dirigidos(proxio)) {
-    const env = parseEnvelope(s)
-    if (!env) continue
-    assert.ok(isIntroKind(env.k))
-    assert.deepEqual(Object.keys(env.d).sort(), ['pubkey'])
+    if (s && s.t === '__cc_hello__') continue
+    assert.equal(parseEnvelope(s), null, 'todo lo de la sala va sellado')
   }
 })
 
@@ -162,9 +166,11 @@ test('el proxio inyecta una jugada EN CLARO y la sala no se la traga', async (t)
   guest.takeSeat('p2')
   await hasta(() => host.status === 'playing')
 
-  // Quien opera el proxio ve pasar los tokens y conoce la sala: puede escribirle al host
-  // haciéndose pasar por el guest. Lo que no puede es sellar — no tiene la llave.
-  beto.proxy.send(host.roomId, { __ccl: 1, g: 'e2e', r: host.roomId, k: K.ACTION, d: { action: { inc: 99 } } })
+  // Quien opera el proxio ve pasar los tokens y conoce la sala: puede colarle al host una
+  // trama a nombre del guest. Lo que no puede es sellarla — no tiene la llave. Se inyecta
+  // DESDE EL SERVIDOR, que es de donde vendría: el cliente del guest ya no sabe mandar en
+  // claro (`requireSealed`), y por eso hace falta el proxio para intentarlo.
+  proxio.inject(host.roomId, beto.proxy.token, { __ccl: 1, g: 'e2e', r: host.roomId, k: K.ACTION, d: { action: { inc: 99 } } })
   await new Promise(r => setTimeout(r, 250))
   assert.equal(host.game.scores.p2, undefined, 'la jugada en claro no entró')
   assert.equal(host.status, 'playing', 'y la partida sigue igual')

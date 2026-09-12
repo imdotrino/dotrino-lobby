@@ -244,16 +244,20 @@ export class Lobby extends Emitter {
   }
 
   /**
-   * PREGUNTAR POR UNA SALA. Es una presentación: sale en claro porque quien busca no
-   * sabe todavía a qué identidad sellarle —del canal solo salen tokens—, y lo único
-   * que lleva es su propia publickey, que el proxio ya tiene de su `identify`. El
-   * resumen que contesta el host SÍ viene sellado (nombres de sala y de jugadores).
+   * PREGUNTAR POR UNA SALA, sellado. Del canal de descubrimiento solo salen tokens, así
+   * que primero se saluda —el saludo es del TRANSPORTE y solo lleva llaves públicas— y
+   * cuando el host dice quién es se le pregunta ya sellado. El resumen que contesta
+   * lleva el nombre de la sala y los apodos de quienes están dentro.
    */
-  _askInfo (token) {
-    if (!this.myPubkey) { console.warn('[lobby] cannot ask for rooms without an identity'); return }
+  async _askInfo (token) {
     try {
-      this.transport.sendIntro(token, envelope(this.gameId, token, K.INFO_REQUEST, { pubkey: this.myPubkey }))
-    } catch (e) { console.warn('[lobby] room info request failed:', e && e.message) }
+      await this.transport.peerIdentity(token, { timeout: 1200 })
+      await this.transport.sendSealedTo(token, envelope(this.gameId, token, K.INFO_REQUEST, {}))
+    } catch (e) {
+      // Por `code`: `no-peer-identity` (no contestó al saludo) no es lo mismo que
+      // `no-encpub` (es viejo y no anuncia llave) ni que un fallo de red.
+      console.warn(`[lobby] could not ask ${token} about its room (${e && e.code}):`, e && e.message)
+    }
   }
 }
 

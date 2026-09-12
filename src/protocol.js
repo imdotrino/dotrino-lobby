@@ -15,10 +15,6 @@ export const ENVELOPE_TAG = 1
 
 /** Tipos de mensaje (campo `k` = kind). */
 export const K = {
-  // ── PRESENTACIÓN (los únicos dos que viajan SIN SELLAR; ver INTRO_KINDS) ──
-  HI: 'hi',                 // { pubkey }  «soy esta identidad; dime la tuya»
-  HI_OK: 'hi.ok',           // { pubkey }  respuesta del host, YA SELLADA
-
   // ── guest → host ─────────────────────────────────────────────
   HELLO: 'hello',           // { pubkey?, name? }  entrar + pedir estado
   REQUEST_STATE: 'reqstate', // {}  resync explícito
@@ -33,7 +29,7 @@ export const K = {
   RECEIPT_SIGN: 'receipt.sign', // { receiptId, sig }  segunda firma del recibo
   RATING_QUERY: 'rep.query', // { queryId, subject }
   RATING_REPLY: 'rep.reply', // { queryId, subject, mine, endorsements }
-  INFO_REQUEST: 'info.req',  // { pubkey }  discovery: pedir resumen de la sala
+  INFO_REQUEST: 'info.req',  // {}  discovery: pedir resumen de la sala
   PING: 'ping',             // { ts }  heartbeat de presencia
   INVITE: 'invite',         // { roomId, name, from, fromName }  invitación (sellada, por pubkey)
   HOST_REKEY: 'host.rekey', // { oldRoomId, newRoomId, hostPubkey }  el host reconectó con token nuevo
@@ -51,28 +47,21 @@ export const K = {
 }
 
 /**
- * LOS DOS ÚNICOS MENSAJES QUE VIAJAN SIN SELLAR, y por qué tiene que haberlos.
+ * DE ESTA LIBRERÍA NO SALE NADA SIN SELLAR (CONVENCIONES §4.1).
  *
- * Sellar exige la llave de cifrado del otro, y el pilar la averigua **por su publickey**
- * (`encPubOf`). Pero el proxio entrega por TOKEN, y un token no dice de quién es: quien
- * puede afirmar «este token es de esta identidad» es la app. En una sala de desconocidos
- * nadie sabe eso todavía — ni el que busca salas conoce al host, ni el host al que llega.
- * Alguien tiene que hablar primero, y el primero no puede sellar.
+ * Sellar exige la llave de cifrado del otro, y el pilar la averigua por su PUBLICKEY.
+ * Pero el proxio entrega por TOKEN, y un token no dice de quién es: del canal de
+ * descubrimiento solo salen tokens. Ese hueco —el que dejaba a una sala de desconocidos
+ * hablando en claro— lo cierra el TRANSPORTE, no esta librería: `helloTo` de
+ * `@dotrino/proxy-client` (≥ 0.22.0) es una trama de control, hermana de la señalización
+ * de WebRTC, que dice «este token es esta identidad» y lleva solo una llave pública —la
+ * misma que el proxio ya tiene atada a esa conexión desde `identify`—. No sube a la app y
+ * `requireSealed` no la ve pasar.
  *
- * Así que la presentación va en claro y **no lleva nada del usuario: solo una publickey**,
- * que es justo el dato que el proxio YA tiene de los dos (se lo dio `identify` al
- * conectar). O sea que lo que se manda en claro no le dice al proxio nada que no supiera.
- * La respuesta ya va sellada, y con ella dentro viaja la identidad del que contesta: a
- * partir de ahí los dos lados sellan y **todo lo demás que llegue sin sellar se tira**
- * (ver `Transport._wire`).
- *
- * No se amplía esta lista sin pensarlo dos veces: cada entrada nueva es un mensaje que
- * el que opera el proxio lee entero.
+ * Aquí se usa y no se reimplementa: el lobby saluda, espera a saber con quién habla, y a
+ * partir de ahí TODO va sellado. Si alguna vez te encuentras escribiendo un mensaje de
+ * presentación en este protocolo, eso es del transporte.
  */
-export const INTRO_KINDS = new Set([K.HI, K.INFO_REQUEST])
-
-/** ¿Es uno de los dos mensajes de presentación (los que pueden ir sin sellar)? */
-export const isIntroKind = (kind) => INTRO_KINDS.has(kind)
 
 /**
  * NODO DUEÑO DE LOS CANALES.

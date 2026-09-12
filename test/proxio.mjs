@@ -140,6 +140,12 @@ export async function startProxio () {
   })
 
   return {
+    /**
+     * LO QUE HARÍA QUIEN OPERA EL PROXIO: colar una trama a nombre de otro. No puede
+     * sellar (no tiene la llave), así que esto es exactamente su mejor intento.
+     */
+    inject: (toToken, fromToken, payload) =>
+      send(toToken, { type: 'message', from: fromToken, message: JSON.stringify(payload), timestamp: Date.now() }),
     url: `ws://127.0.0.1:${port}`,
     port,
     frames,

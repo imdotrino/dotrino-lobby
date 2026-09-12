@@ -120,7 +120,7 @@ export interface JoinRoomOptions {
   /**
    * Identidad del host. Con ella el saludo sale SELLADO desde el primer mensaje.
    * Viene en el resumen de `listRooms` (`hostPubkey`) y en la invitación (`from`);
-   * si falta, la sala se presenta primero (K.HI) y la pregunta.
+   * si falta, se la pregunta al saludo del transporte (`helloTo`).
    */
   hostPubkey?: string
 }
@@ -197,8 +197,8 @@ export declare class Lobby extends Emitter {
 }
 
 /**
- * Transporte del lobby. NO expone ningún envío en claro (CONVENCIONES §4.1): lo único
- * que sale sin sellar es la presentación, y solo lleva una publickey.
+ * Transporte del lobby. NO expone ningún envío en claro (CONVENCIONES §4.1) y arranca el
+ * cliente con `requireSealed: true`, que corta en las dos direcciones.
  */
 export declare class Transport {
   constructor (opts?: { proxy?: any; identity?: any; url?: string })
@@ -208,12 +208,16 @@ export declare class Transport {
   readonly myEncPub: string | null
   connect (): Promise<string | null>
   subscribe (gameId: string, fn: (from: string, env: any, meta: any) => void): () => void
-  /** Sellado por token. `peerPubkey` dice qué identidad hay detrás; sin ella, lanza. */
-  sendSealedTo (token: string, env: any, peerPubkey: string): Promise<void>
+  /** Sellado por token. Sin `peerPubkey` lo resuelve el saludo del transporte. */
+  sendSealedTo (token: string, env: any, peerPubkey?: string): Promise<void>
   /** Sellado por pubkey (cola offline 24 h). */
   sendSealedByPubkey (pubkeys: string | string[], env: any): Promise<void>
-  /** La presentación: el único envío sin sellar, y solo admite INTRO_KINDS. */
-  sendIntro (token: string, env: any): void
+  /** De quién es un token, según el saludo del transporte; `null` si nadie lo ha dicho. */
+  pubkeyOfToken (token: string): string | null
+  /** Decirle a un token quién soy (`helloTo` del pilar). El otro contesta una vez. */
+  helloTo (token: string | string[]): void
+  /** Saluda y espera a saber con quién habla. Lanza `no-peer-identity` si nadie contesta. */
+  peerIdentity (token: string, opts?: { timeout?: number }): Promise<string>
 }
 
 export function createLobby (opts: CreateLobbyOptions): Promise<Lobby>
@@ -240,9 +244,6 @@ export function signReceiptHalf (identity: any, a: string, b: string, ts: number
 
 // Protocolo / utilidades
 export const K: Record<string, string>
-/** Los dos únicos tipos que pueden viajar sin sellar (llevan solo una publickey). */
-export const INTRO_KINDS: Set<string>
-export function isIntroKind (kind: string): boolean
 export function discoveryChannel (gameId: string): string
 export function roomChannel (gameId: string, roomId: string): string
 export function envelope (gameId: string, roomId: string, kind: string, data?: any, seq?: number): any

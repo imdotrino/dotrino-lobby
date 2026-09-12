@@ -8,7 +8,7 @@
 // sobre ella se comprueba que no viaja nada en claro.
 
 import { Emitter } from '../src/util.js'
-import { parseEnvelope, isIntroKind } from '../src/protocol.js'
+import { parseEnvelope } from '../src/protocol.js'
 import { seal, open, isSealed, makeEncKeypair } from '@dotrino/proxy-client'
 
 export class MockHub {
@@ -43,6 +43,9 @@ export class MockHub {
 
   /** Todo lo que el proxio pudo LEER (lo que no venía sellado). */
   get plaintext () { return this.wire.filter(f => !isSealed(f.payload)).map(f => f.payload) }
+
+  /** …y de eso, lo que NO es el saludo del transporte (que solo lleva llaves públicas). */
+  get plaintextNoHello () { return this.plaintext.filter(p => !p || p.t !== HELLO_TAG) }
 
   route (from, to, payload) {
     const tos = Array.isArray(to) ? to : [to]
@@ -87,6 +90,9 @@ export class MockHub {
   }
 }
 
+/** La misma marca que usa el transporte de verdad para su trama de control. */
+export const HELLO_TAG = '__cc_hello__'
+
 export class MockTransport extends Emitter {
   constructor (hub, token, identity) {
     super()
@@ -96,6 +102,8 @@ export class MockTransport extends Emitter {
     this._subs = new Map()
     this._down = false
     this._enc = null
+    this._tokenPubkeys = new Map()
+    this._helloSent = new Set()
     /** Lo que ESTE extremo mandó y recibió, ya abierto (para comprobar el juego). */
     this.sent = []
     this.received = []
@@ -124,6 +132,15 @@ export class MockTransport extends Emitter {
   }
 
   async _deliver (from, payload) {
+    // El saludo es del TRANSPORTE: se atiende aquí y no sube a la app, igual que en el
+    // pilar. Lleva una llave pública y nada más.
+    if (payload && payload.t === HELLO_TAG) {
+      if (typeof payload.publickey !== 'string') return
+      this._tokenPubkeys.set(from, payload.publickey)
+      if (!this._helloSent.has(from)) this.helloTo(from)
+      this.emit('peer_identity', from, payload.publickey)
+      return
+    }
     let env = payload
     let sealed = false
     if (isSealed(payload)) {
@@ -132,9 +149,9 @@ export class MockTransport extends Emitter {
       sealed = true
     }
     const parsed = parseEnvelope(env); if (!parsed) return
-    // LA MISMA REGLA QUE EL TRANSPORTE DE VERDAD: lo que no viene sellado se tira,
-    // salvo los dos mensajes de presentación.
-    if (!sealed && !isIntroKind(parsed.k)) return
+    // LA MISMA REGLA QUE EL TRANSPORTE DE VERDAD (`requireSealed`): lo que no viene
+    // sellado se tira, sin excepciones.
+    if (!sealed) return
     this.received.push({ from, env: parsed, sealed })
     const subs = this._subs.get(parsed.g); if (!subs) return
     for (const fn of [...subs]) { try { fn(from, parsed, { via: 'mock', sealed }) } catch (e) { console.error(e) } }
@@ -161,7 +178,12 @@ export class MockTransport extends Emitter {
   // ── Envío (la misma superficie que src/transport.js) ────────────
 
   async sendSealedTo (token, env, peerPubkey) {
-    if (!peerPubkey) { const e = new Error('unknown identity behind that token'); e.code = 'unknown-peer'; throw e }
+    peerPubkey = peerPubkey || this.pubkeyOfToken(token)
+    if (!peerPubkey) {
+      const e = new Error('nobody has said whose this token is')
+      e.code = 'no-peer-identity'
+      throw e
+    }
     await this._ensureEnc()
     const sobre = await seal(env, this.hub.encPubOf(peerPubkey))
     this.sent.push({ to: token, env, sealed: true })
@@ -179,10 +201,28 @@ export class MockTransport extends Emitter {
     }
   }
 
-  sendIntro (token, env) {
-    if (!isIntroKind(env && env.k)) { const e = new Error(`sendIntro refuses "${env && env.k}"`); e.code = 'unsealed'; throw e }
-    this.sent.push({ to: token, env, sealed: false })
-    this.hub.route(this._token, token, env)
+  // ── El saludo del transporte (lo que en el pilar hace `helloTo`) ──
+
+  pubkeyOfToken (token) { return this._tokenPubkeys.get(token) || null }
+
+  helloTo (token) {
+    const pk = this.identity && this.identity.me && this.identity.me.publickey
+    if (!pk) { const e = new Error('identify first'); e.code = 'not-identified'; throw e }
+    for (const t of (Array.isArray(token) ? token : [token])) {
+      if (!t || t === this._token) continue
+      this._helloSent.add(t)
+      this.hub.route(this._token, t, { t: HELLO_TAG, publickey: pk })
+    }
+  }
+
+  peerIdentity (token, { timeout = 2000 } = {}) {
+    const ya = this.pubkeyOfToken(token)
+    if (ya) return Promise.resolve(ya)
+    return new Promise((resolve, reject) => {
+      const off = this.on('peer_identity', (t, pk) => { if (t !== token) return; clearTimeout(timer); off(); resolve(pk) })
+      const timer = setTimeout(() => { off(); const e = new Error('never said whose it is'); e.code = 'no-peer-identity'; reject(e) }, timeout)
+      try { this.helloTo(token) } catch (e) { clearTimeout(timer); off(); reject(e) }
+    })
   }
 
   publish (channel) { this.hub.join(this._token, channel); return Promise.resolve({ ok: true }) }
