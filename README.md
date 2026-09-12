@@ -13,8 +13,8 @@ matchmaking filtrado por reputación y recibo de partida co-firmado.**
 Está construido **sobre** los pilares compartidos — no reimplementa transporte ni
 identidad:
 
-- `@dotrino/proxy-client` — transporte (canales, `identify`,
-  `send`/`sendByPubkey`, WebRTC). **Una sola conexión**, reutilizable.
+- `@dotrino/proxy-client` **≥ 0.21.0** — transporte (canales, `identify`,
+  **sellado extremo a extremo**, WebRTC). **Una sola conexión**, reutilizable.
 - `@dotrino/identity` — vault (firma, challenge/response,
   **contactos**).
 - `@dotrino/reputation` — web-of-trust (gate de admisión,
@@ -22,6 +22,60 @@ identidad:
 
 Headless y framework-agnóstico (vanilla + EventEmitter). Sirve igual para Vue,
 vanilla o nativo-vía-WebView.
+
+---
+
+## Todo lo dirigido va SELLADO (desde 0.8.0)
+
+El proxio **no cifra**: `send`/`sendByPubkey` mandan el payload tal cual y lo lee quien
+opera el servidor — y el de producción corre en un VPS alquilado. Hasta 0.7.0 esta
+librería hablaba así, o sea que **el chat, las jugadas, el nombre de la sala y el apodo
+de cada jugador iban legibles**. CONVENCIONES §4.1 lo llama por su nombre: un agujero.
+
+Desde 0.8.0:
+
+- **de salida**, todo lo de la sala va sellado (`sendSealedTo` por token, `sendSealed`
+  por pubkey para invitaciones y re-clave). No hay ninguna función que mande en claro;
+- **de entrada**, lo que llega sin sellar **se tira**. Sellar solo de salida no sirve de
+  nada: quien acepta texto en claro se salta el sellado entero, y alguien que nunca leyó
+  nada podría colar una jugada falsa;
+- **hace falta identidad**. `createLobby` sin bóveda lanza `code: 'no-identity'`: sellar
+  es sellar *a alguien*, y antes esto degradaba a jugar en claro.
+
+### La presentación, que es lo único que va sin sellar
+
+Sellar exige la llave de cifrado del otro, y el pilar la averigua **por su publickey**.
+Pero el proxio entrega por **token**, y un token no dice de quién es: del canal de
+descubrimiento solo salen tokens. En una sala de desconocidos nadie sabe todavía a quién
+le está hablando, así que alguien tiene que hablar primero — y el primero no puede sellar.
+
+Esa primera frase es la **presentación**, y **no lleva nada del usuario: solo una
+publickey**, que es justo el dato que el proxio ya tiene de los dos desde `identify`. Son
+dos mensajes (`K.HI` al entrar, `K.INFO_REQUEST` al listar salas) y sus respuestas **ya
+van selladas**. A partir de ahí, todo.
+
+Si la app ya sabe quién es el host, ni eso: `joinRoom(roomId, { hostPubkey })` sella desde
+el primer mensaje. La pubkey viene en el resumen de `listRooms` (`hostPubkey`) y en la
+invitación (`from`); `quickMatch` la pasa sola.
+
+> Cuando `@dotrino/proxy-client` aprenda a atar tokens a identidades por su cuenta
+> (el saludo del transporte), esta presentación se borra y se usa la suya: es del
+> transporte, no del lobby.
+
+**Lo que esto NO resuelve, dicho en voz alta.** Quien presenta a dos desconocidos es el
+proxio: del canal salen tokens, y la identidad del host la dice él mismo. Un proxio
+hostil podría poner la suya en medio y leer la partida — eso no lo arregla ningún
+sellado, lo arregla **conocer la pubkey del otro por fuera**: una invitación de un
+contacto (`from`), un enlace que la lleve, o un acta compartida. Lo que sí queda cerrado
+con esto es lo de siempre y lo que de verdad pasa: que el que opera el servidor **lea sin
+más** el chat y las jugadas de todas las salas.
+
+### Qué NO se sella
+
+Los **canales públicos** (`publish`/`list`): son públicos por diseño (§4.1) y por ahí solo
+va el nombre del canal y quién está en él. De paso, en 0.8.0 se quitó el
+`{ roomName, gameType }` que se publicaba con el canal de descubrimiento: **el proxio se lo
+quedaba y no se lo daba a nadie**, así que el nombre de la sala solo viajaba para él.
 
 ---
 
@@ -216,10 +270,10 @@ room.matchReceipt(pubkey) // { a, b, ts, sigA, sigB } | null
 createLobby(opts): Promise<Lobby>
 
 Lobby.createRoom(opts?): Promise<Room>
-Lobby.joinRoom(roomId, opts?): Promise<Room>
+Lobby.joinRoom(roomId, opts?): Promise<Room>   // opts.hostPubkey → sella desde el 1er mensaje
 Lobby.listRooms(opts?): Promise<RoomSummary[]>
 Lobby.quickMatch(opts?): Promise<Room>
-Lobby.inviteContact(pubkey, { roomId, name }): void
+Lobby.inviteContact(pubkey, { roomId, name }): Promise<void>   // sellada
 Lobby.listContacts(): Promise<PeerInfo[]>
 Lobby.reputationOf(pubkey): Promise<AggregateResult>
 
@@ -249,5 +303,12 @@ Ver tipos completos en [`src/index.d.ts`](./src/index.d.ts).
 ## Tests
 
 ```bash
-npm test    # node --test
+npm test          # node --test: todo
+npm run test:cable   # solo la prueba de punta a punta por un socket de verdad
 ```
+
+`test/sealed.test.js` mira **lo que ve quien opera el proxio** (el hub de pruebas sella
+de verdad, con la cripto de `@dotrino/identity`) y `test/e2e-proxio.test.js` juega una
+partida entera entre dos clientes de Node **por un WebSocket real**, contra un proxio que
+apunta cada trama en los dos sentidos: ahí se comprueba que por el cable no pasan ni el
+chat, ni las jugadas, ni los nombres.

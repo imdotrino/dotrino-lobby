@@ -1,6 +1,6 @@
 {
   "name": "@dotrino/lobby",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Lobby + matchmaking reciclable para juegos del ecosistema Dotrino: salas, asientos, espectadores, motor de turnos autoritativo, reputación y contactos sobre el proxy/identity/reputation compartidos",
   "type": "module",
   "main": "src/index.js",
@@ -19,6 +19,7 @@
   ],
   "scripts": {
     "test": "node --test",
+    "test:cable": "node --test test/e2e-proxio.test.js",
     "type-check": "tsc --noEmit"
   },
   "keywords": [
@@ -32,8 +33,8 @@
     "web-of-trust"
   ],
   "peerDependencies": {
-    "@dotrino/identity": ">=0.5.0",
-    "@dotrino/proxy-client": ">=0.18.2",
+    "@dotrino/identity": ">=0.53.0",
+    "@dotrino/proxy-client": ">=0.21.0",
     "@dotrino/reputation": ">=0.3.0"
   },
   "peerDependenciesMeta": {
@@ -49,6 +50,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "ws": "8.21.3"
   }
 }

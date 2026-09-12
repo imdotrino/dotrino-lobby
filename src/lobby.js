@@ -79,7 +79,14 @@ export class Lobby extends Emitter {
     return room
   }
 
-  /** Unirse a una sala existente por su roomId (== token del host). */
+  /**
+   * Unirse a una sala existente por su roomId (== token del host).
+   *
+   * `opts.hostPubkey` es la identidad del host, y con ella el saludo ya sale sellado
+   * desde el primer mensaje. Viene en el resumen de `listRooms` (`hostPubkey`) y en la
+   * invitación (`from`). Si no se pasa, la sala se presenta primero (K.HI) y lo
+   * pregunta — un enlace compartido solo trae el token.
+   */
   async joinRoom (roomId, opts = {}) {
     await this.transport.connect()
     const room = new Room({ transport: this.transport, gameId: this.gameId, roomId, role: 'guest', config: this._roomConfig(opts) })
@@ -123,7 +130,7 @@ export class Lobby extends Emitter {
       const done = () => { if (timer) clearTimeout(timer); this._infoCollector = null; resolve([...got.values()].sort((a, b) => String(a.roomId || '').localeCompare(String(b.roomId || '')))) }
       if (!tokens.length) return done()
       this._infoCollector = (from, summary) => { if (summary) got.set(from, summary); if (got.size >= tokens.length) done() }
-      for (const t of tokens) this._sendTo(t, K.INFO_REQUEST, {})
+      for (const t of tokens) this._askInfo(t)
       timer = setTimeout(done, timeout)
       if (timer.unref) timer.unref()
     })
@@ -142,7 +149,7 @@ export class Lobby extends Emitter {
       if (r.status !== STATUS.WAITING || !(r.openSeats > 0)) continue
       const verdict = await this._gate(r.hostPubkey)
       if (!verdict.ok) continue
-      const room = await this.joinRoom(r.roomId, opts)
+      const room = await this.joinRoom(r.roomId, { ...opts, hostPubkey: r.hostPubkey || opts.hostPubkey })
       if (opts.autoSeat !== false) this._autoSeat(room, opts.seat)
       return room
     }
@@ -166,11 +173,18 @@ export class Lobby extends Emitter {
 
   // ── Invitaciones / contactos ────────────────────────────────────
 
-  /** Invitar a un contacto (por pubkey) a una sala. Usa la cola offline 24 h. */
+  /**
+   * Invitar a un contacto (por pubkey) a una sala. Usa la cola offline 24 h.
+   *
+   * VA SELLADA: lleva el nombre de la sala y el apodo de quien invita, o sea contenido
+   * del usuario, y por el camino de pubkey eso lo leía quien opera el proxio. Devuelve
+   * la promesa del envío — si no se puede sellar, falla con su `code` en vez de salir
+   * en claro.
+   */
   inviteContact (pubkey, { roomId, name } = {}) {
     const rid = roomId || this.transport.token
     const env = envelope(this.gameId, rid, K.INVITE, { roomId: rid, name: name || null, from: this.myPubkey, fromName: (this.identity && this.identity.me && this.identity.me.nickname) || null })
-    this.transport.sendByPubkey(pubkey, env)
+    return this.transport.sendSealedByPubkey(pubkey, env)
   }
 
   /** Contactos del vault (compartidos entre apps del ecosistema). */
@@ -220,6 +234,7 @@ export class Lobby extends Emitter {
       identity: this.identity,
       reputation: this.reputation,
       name: opts.name || null,
+      hostPubkey: opts.hostPubkey || null,
       playerName: opts.playerName || this.config.playerName || null,
       seed: opts.seed ?? this.config.seed,
       // Indicador derivado a co-firmar al terminar (default ELO, scope=gameId).
@@ -228,7 +243,18 @@ export class Lobby extends Emitter {
     }
   }
 
-  _sendTo (token, kind, data) { this.transport.send(token, envelope(this.gameId, token, kind, data)) }
+  /**
+   * PREGUNTAR POR UNA SALA. Es una presentación: sale en claro porque quien busca no
+   * sabe todavía a qué identidad sellarle —del canal solo salen tokens—, y lo único
+   * que lleva es su propia publickey, que el proxio ya tiene de su `identify`. El
+   * resumen que contesta el host SÍ viene sellado (nombres de sala y de jugadores).
+   */
+  _askInfo (token) {
+    if (!this.myPubkey) { console.warn('[lobby] cannot ask for rooms without an identity'); return }
+    try {
+      this.transport.sendIntro(token, envelope(this.gameId, token, K.INFO_REQUEST, { pubkey: this.myPubkey }))
+    } catch (e) { console.warn('[lobby] room info request failed:', e && e.message) }
+  }
 }
 
 /**
@@ -252,6 +278,14 @@ export async function createLobby (opts = {}) {
   if (!opts.gameId) throw new Error('[lobby] createLobby: falta gameId')
   const transport = opts.transport || new Transport({ proxy: opts.proxy, identity: opts.identity, url: opts.url })
   await transport.connect()
+  const identity = transport.identity || opts.identity || null
+  // SIN IDENTIDAD NO SE JUEGA, y se dice aquí en vez de a la mitad de una partida.
+  // Todo lo dirigido va sellado (CONVENCIONES §4.1) y sellar es sellar A ALGUIEN: sin
+  // identidad no hay a quién, ni nadie puede sellarnos a nosotros. Antes se degradaba
+  // y la sala funcionaba en claro; eso es justo lo que esto cierra.
+  if (!identity || !identity.me || !identity.me.publickey) {
+    throw Object.assign(new Error('[lobby] createLobby: no identity — nothing can be sealed'), { code: 'no-identity' })
+  }
   const config = {
     seats: normalizeSeats(opts.seats || { min: 2, max: 2 }),
     engineSpec: opts.engine || null,
@@ -262,7 +296,7 @@ export async function createLobby (opts = {}) {
     onHostLost: opts.onHostLost,
     disconnectGraceMs: opts.disconnectGraceMs,
     requireVerify: opts.requireVerify,
-    identity: transport.identity || opts.identity || null,
+    identity,
     reputation: opts.reputation || null,
     matchmaking: opts.matchmaking || {},
     playerName: opts.playerName || null,

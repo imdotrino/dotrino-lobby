@@ -15,6 +15,10 @@ export const ENVELOPE_TAG = 1
 
 /** Tipos de mensaje (campo `k` = kind). */
 export const K = {
+  // ── PRESENTACIÓN (los únicos dos que viajan SIN SELLAR; ver INTRO_KINDS) ──
+  HI: 'hi',                 // { pubkey }  «soy esta identidad; dime la tuya»
+  HI_OK: 'hi.ok',           // { pubkey }  respuesta del host, YA SELLADA
+
   // ── guest → host ─────────────────────────────────────────────
   HELLO: 'hello',           // { pubkey?, name? }  entrar + pedir estado
   REQUEST_STATE: 'reqstate', // {}  resync explícito
@@ -29,9 +33,9 @@ export const K = {
   RECEIPT_SIGN: 'receipt.sign', // { receiptId, sig }  segunda firma del recibo
   RATING_QUERY: 'rep.query', // { queryId, subject }
   RATING_REPLY: 'rep.reply', // { queryId, subject, mine, endorsements }
-  INFO_REQUEST: 'info.req',  // {}  discovery: pedir resumen de la sala
+  INFO_REQUEST: 'info.req',  // { pubkey }  discovery: pedir resumen de la sala
   PING: 'ping',             // { ts }  heartbeat de presencia
-  INVITE: 'invite',         // { roomId, name, from, fromName }  invitación (sendByPubkey)
+  INVITE: 'invite',         // { roomId, name, from, fromName }  invitación (sellada, por pubkey)
   HOST_REKEY: 'host.rekey', // { oldRoomId, newRoomId, hostPubkey }  el host reconectó con token nuevo
 
   // ── host → guest(s) ──────────────────────────────────────────
@@ -45,6 +49,30 @@ export const K = {
   KICKED: 'kicked',         // { reason }
   PONG: 'pong'              // { ts }
 }
+
+/**
+ * LOS DOS ÚNICOS MENSAJES QUE VIAJAN SIN SELLAR, y por qué tiene que haberlos.
+ *
+ * Sellar exige la llave de cifrado del otro, y el pilar la averigua **por su publickey**
+ * (`encPubOf`). Pero el proxio entrega por TOKEN, y un token no dice de quién es: quien
+ * puede afirmar «este token es de esta identidad» es la app. En una sala de desconocidos
+ * nadie sabe eso todavía — ni el que busca salas conoce al host, ni el host al que llega.
+ * Alguien tiene que hablar primero, y el primero no puede sellar.
+ *
+ * Así que la presentación va en claro y **no lleva nada del usuario: solo una publickey**,
+ * que es justo el dato que el proxio YA tiene de los dos (se lo dio `identify` al
+ * conectar). O sea que lo que se manda en claro no le dice al proxio nada que no supiera.
+ * La respuesta ya va sellada, y con ella dentro viaja la identidad del que contesta: a
+ * partir de ahí los dos lados sellan y **todo lo demás que llegue sin sellar se tira**
+ * (ver `Transport._wire`).
+ *
+ * No se amplía esta lista sin pensarlo dos veces: cada entrada nueva es un mensaje que
+ * el que opera el proxio lee entero.
+ */
+export const INTRO_KINDS = new Set([K.HI, K.INFO_REQUEST])
+
+/** ¿Es uno de los dos mensajes de presentación (los que pueden ir sin sellar)? */
+export const isIntroKind = (kind) => INTRO_KINDS.has(kind)
 
 /**
  * NODO DUEÑO DE LOS CANALES.

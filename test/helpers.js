@@ -1,11 +1,26 @@
 // Helpers de test: hub en memoria que emula el proxy (ruteo por token, canales,
 // presencia) + identidades falsas. No contiene tests (node --test lo ignora).
+//
+// EL HUB SELLA DE VERDAD. No simula el sellado: usa `seal`/`open` de
+// `@dotrino/proxy-client` (que por dentro son `wrapForMember`/`openWrap` de
+// `@dotrino/identity`), con un par ECDH real por endpoint. Así el hub ve
+// exactamente lo que vería quien opera el proxio, y `hub.wire` es esa vista:
+// sobre ella se comprueba que no viaja nada en claro.
 
 import { Emitter } from '../src/util.js'
-import { parseEnvelope } from '../src/protocol.js'
+import { parseEnvelope, isIntroKind } from '../src/protocol.js'
+import { seal, open, isSealed, makeEncKeypair } from '@dotrino/proxy-client'
 
 export class MockHub {
-  constructor () { this.endpoints = new Map(); this.channels = new Map(); this.byPubkey = new Map(); this._n = 0 }
+  constructor () {
+    this.endpoints = new Map()
+    this.channels = new Map()
+    this.byPubkey = new Map()
+    this.encPubs = new Map() // publickey → encPub anunciada (lo que hace el `identify`)
+    /** Todo lo que pasa por el proxio, tal cual lo ve él. */
+    this.wire = []
+    this._n = 0
+  }
 
   endpoint (opts = {}) {
     const token = opts.token || ('tk' + (++this._n))
@@ -15,18 +30,33 @@ export class MockHub {
     return ep
   }
 
-  route (from, to, env) {
+  /** Lo que el proxio guarda del `identify`: la llave de cifrado de cada identidad. */
+  announce (publickey, encPub) { this.encPubs.set(publickey, encPub) }
+
+  encPubOf (publickey) {
+    const k = this.encPubs.get(publickey)
+    if (!k) { const e = new Error('no encryption key announced for that identity'); e.code = 'no-encpub'; throw e }
+    return k
+  }
+
+  record (from, to, payload) { this.wire.push({ from, to, payload }) }
+
+  /** Todo lo que el proxio pudo LEER (lo que no venía sellado). */
+  get plaintext () { return this.wire.filter(f => !isSealed(f.payload)).map(f => f.payload) }
+
+  route (from, to, payload) {
     const tos = Array.isArray(to) ? to : [to]
+    this.record(from, tos, payload)
     for (const t of tos) {
       const ep = this.endpoints.get(t)
       if (!ep || ep._down) continue
-      queueMicrotask(() => ep._deliver(from, env))
+      queueMicrotask(() => ep._deliver(from, payload))
     }
   }
 
-  routeByPubkey (from, pubkeys, env) {
+  routeByPubkey (from, pubkeys, payload) {
     const arr = Array.isArray(pubkeys) ? pubkeys : [pubkeys]
-    for (const pk of arr) { const t = this.byPubkey.get(pk); if (t) this.route(from, t, env) }
+    for (const pk of arr) { const t = this.byPubkey.get(pk); if (t) this.route(from, t, payload) }
   }
 
   join (token, channel) {
@@ -58,20 +88,56 @@ export class MockHub {
 }
 
 export class MockTransport extends Emitter {
-  constructor (hub, token, identity) { super(); this.hub = hub; this._token = token; this.identity = identity; this._subs = new Map(); this._down = false }
+  constructor (hub, token, identity) {
+    super()
+    this.hub = hub
+    this._token = token
+    this.identity = identity
+    this._subs = new Map()
+    this._down = false
+    this._enc = null
+    /** Lo que ESTE extremo mandó y recibió, ya abierto (para comprobar el juego). */
+    this.sent = []
+    this.received = []
+  }
+
   get token () { return this._token }
   get isReady () { return !this._down }
-  async connect () { return this._token }
+
+  async connect () {
+    await this._ensureEnc()
+    return this._token
+  }
+
+  async _ensureEnc () {
+    if (this._enc) return this._enc
+    this._enc = await makeEncKeypair()
+    const pk = this.identity && this.identity.me && this.identity.me.publickey
+    // Es lo que hace `identify`: dejar anunciada la llave con la que me sellan.
+    if (pk) this.hub.announce(pk, this._enc.encPub)
+    return this._enc
+  }
 
   subscribe (gameId, fn) {
     let s = this._subs.get(gameId); if (!s) { s = new Set(); this._subs.set(gameId, s) }
     s.add(fn); return () => { const x = this._subs.get(gameId); if (x) x.delete(fn) }
   }
 
-  _deliver (from, env) {
+  async _deliver (from, payload) {
+    let env = payload
+    let sealed = false
+    if (isSealed(payload)) {
+      const mio = await this._ensureEnc()
+      try { env = await open(payload, mio.privateKey) } catch (_) { return } // no era para mí
+      sealed = true
+    }
     const parsed = parseEnvelope(env); if (!parsed) return
+    // LA MISMA REGLA QUE EL TRANSPORTE DE VERDAD: lo que no viene sellado se tira,
+    // salvo los dos mensajes de presentación.
+    if (!sealed && !isIntroKind(parsed.k)) return
+    this.received.push({ from, env: parsed, sealed })
     const subs = this._subs.get(parsed.g); if (!subs) return
-    for (const fn of [...subs]) { try { fn(from, parsed, { via: 'mock' }) } catch (e) { console.error(e) } }
+    for (const fn of [...subs]) { try { fn(from, parsed, { via: 'mock', sealed }) } catch (e) { console.error(e) } }
   }
 
   // Simula una reconexión del WS: cae el token viejo (notifica peer_disconnected
@@ -92,8 +158,33 @@ export class MockTransport extends Emitter {
     this.emit('reconnect', newToken)
   }
 
-  send (to, env) { this.hub.route(this._token, to, env) }
-  sendByPubkey (pubkeys, env) { this.hub.routeByPubkey(this._token, pubkeys, env) }
+  // ── Envío (la misma superficie que src/transport.js) ────────────
+
+  async sendSealedTo (token, env, peerPubkey) {
+    if (!peerPubkey) { const e = new Error('unknown identity behind that token'); e.code = 'unknown-peer'; throw e }
+    await this._ensureEnc()
+    const sobre = await seal(env, this.hub.encPubOf(peerPubkey))
+    this.sent.push({ to: token, env, sealed: true })
+    this.hub.route(this._token, token, sobre)
+  }
+
+  async sendSealedByPubkey (pubkeys, env) {
+    await this._ensureEnc()
+    const arr = Array.isArray(pubkeys) ? pubkeys : [pubkeys]
+    // Una envoltura por destinatario: cada uno tiene su llave.
+    const sobres = await Promise.all(arr.map(async (pk) => [pk, await seal(env, this.hub.encPubOf(pk))]))
+    for (const [pk, sobre] of sobres) {
+      this.sent.push({ to: pk, env, sealed: true })
+      this.hub.routeByPubkey(this._token, pk, sobre)
+    }
+  }
+
+  sendIntro (token, env) {
+    if (!isIntroKind(env && env.k)) { const e = new Error(`sendIntro refuses "${env && env.k}"`); e.code = 'unsealed'; throw e }
+    this.sent.push({ to: token, env, sealed: false })
+    this.hub.route(this._token, token, env)
+  }
+
   publish (channel) { this.hub.join(this._token, channel); return Promise.resolve({ ok: true }) }
   unpublish (channel) { this.hub.leave(this._token, channel); return Promise.resolve({ ok: true }) }
   list (channel) { return Promise.resolve(this.hub.members(channel)) }
@@ -122,4 +213,4 @@ export function fakeIdentity (pubkey, nickname = null) {
 }
 
 /** Espera a que se vacíe la cola de microtasks/macrotasks unas cuantas veces. */
-export async function tick (n = 6) { for (let i = 0; i < n; i++) await new Promise(r => setTimeout(r, 2)) }
+export async function tick (n = 12) { for (let i = 0; i < n; i++) await new Promise(r => setTimeout(r, 3)) }

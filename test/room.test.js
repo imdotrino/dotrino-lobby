@@ -237,19 +237,18 @@ test('reconexión del HOST: HOST_REKEY mantiene viva la partida para los guests'
   assert.equal(guest.game.scores.p1, 1, 'la acción del host se propaga tras la reconexión')
 })
 
-test('sin identidad: mySeat funciona por mySeatId del snapshot', async () => {
+// Antes esto probaba que una sala SIN identidad funcionaba (el host marcaba el asiento
+// propio en el snapshot). Ya no: todo lo dirigido va sellado y sellar es sellar A
+// ALGUIEN. Sin identidad no hay a quién, así que se para al crear el lobby en vez de
+// jugar una partida entera en claro.
+test('sin identidad no se juega: se para al crear el lobby y se dice con su code', async () => {
   const hub = new MockHub()
-  const epA = hub.endpoint(), epB = hub.endpoint() // sin identidad
+  const ep = hub.endpoint() // sin identidad
   const base = { gameId: 'g', seats: ['p1', 'p2'], engine: counter, requireVerify: false, start: 'full' }
-  const lobbyA = await createLobby({ ...base, transport: epA })
-  const lobbyB = await createLobby({ ...base, transport: epB })
-  const host = await lobbyA.createRoom()
-  const guest = await lobbyB.joinRoom(host.roomId)
-  await tick()
-  host.takeSeat('p1'); guest.takeSeat('p2'); await tick()
-  assert.equal(host.mySeat, 'p1')
-  assert.equal(guest.mySeat, 'p2', 'mySeat se resuelve por mySeatId aun sin pubkey')
-  assert.equal(host.status, 'playing')
+  await assert.rejects(
+    () => createLobby({ ...base, transport: ep }),
+    (e) => e.code === 'no-identity'
+  )
 })
 
 test('recibo de partida co-firmado (con verify)', async () => {
