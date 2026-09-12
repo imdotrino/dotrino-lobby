@@ -13,6 +13,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createLobby } from '../src/lobby.js'
 import { K, isIntroKind } from '../src/protocol.js'
+import * as publico from '../src/index.js'
 import { MockHub, fakeIdentity, tick } from './helpers.js'
 
 const counter = {
@@ -36,6 +37,20 @@ async function dosLobbies (hub, extra = {}) {
 
 /** Todo lo que el proxio pudo leer, como texto. */
 const legible = (hub) => hub.plaintext.map(p => JSON.stringify(p)).join('\n')
+
+// ───────────────────────────────────────────────────────────────────────────
+// 0. La puerta del paquete
+// ───────────────────────────────────────────────────────────────────────────
+
+// `src/index.d.ts` declaraba `isIntroKind`/`INTRO_KINDS` y `src/index.js` no los
+// exportaba: los tipos decían que sí y en marcha era `undefined`. Lo cazó una prueba
+// contra el paquete ya publicado, que es tarde.
+test('el paquete exporta lo que dice exportar sobre el sellado', () => {
+  assert.equal(typeof publico.isIntroKind, 'function')
+  assert.ok(publico.INTRO_KINDS instanceof Set)
+  assert.equal(publico.isIntroKind(publico.K.HI), true)
+  assert.equal(publico.isIntroKind(publico.K.CHAT), false)
+})
 
 // ───────────────────────────────────────────────────────────────────────────
 // 1. Una partida entera: nada del usuario queda legible
