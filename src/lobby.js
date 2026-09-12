@@ -84,8 +84,8 @@ export class Lobby extends Emitter {
    *
    * `opts.hostPubkey` es la identidad del host, y con ella el saludo ya sale sellado
    * desde el primer mensaje. Viene en el resumen de `listRooms` (`hostPubkey`) y en la
-   * invitación (`from`). Si no se pasa, la sala se presenta primero (K.HI) y lo
-   * pregunta — un enlace compartido solo trae el token.
+   * invitación (`from`). Si no se pasa, se lo pregunta al saludo del transporte
+   * (`helloTo`) — un enlace compartido solo trae el token, y un token no dice de quién es.
    */
   async joinRoom (roomId, opts = {}) {
     await this.transport.connect()
