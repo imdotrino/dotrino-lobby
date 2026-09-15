@@ -13,6 +13,7 @@ import assert from 'node:assert/strict'
 import { WebSocketProxyClient } from '@dotrino/proxy-client'
 import { createLobby } from '../src/lobby.js'
 import { K, parseEnvelope } from '../src/protocol.js'
+import { encodeBroadcastRef, decodeBroadcastRef } from '../src/broadcast.js'
 import { startProxio } from './proxio.mjs'
 import { bovedaDeMentira } from './boveda.mjs'
 
@@ -174,4 +175,48 @@ test('el proxio inyecta una jugada EN CLARO y la sala no se la traga', async (t)
   await new Promise(r => setTimeout(r, 250))
   assert.equal(host.game.scores.p2, undefined, 'la jugada en claro no entró')
   assert.equal(host.status, 'playing', 'y la partida sigue igual')
+})
+
+test('emisión por el cable: quien tiene el enlace mira, el proxio no lee nada y el enlace aguanta una recarga', async (t) => {
+  const proxio = await startProxio()
+  const TORNEO = 'Torneo-del-club-5521'
+  const JUGADOR = 'Mariela-7734'
+  const idAna = await bovedaDeMentira('Ana')
+  const cliente = () => new WebSocketProxyClient({ url: proxio.url, enableWebRTC: false, autoReconnect: false, enableHeartbeat: false })
+
+  let proxyAna = cliente()
+  const lobbyAna = await createLobby({ gameId: 'padel', proxy: proxyAna, identity: idAna })
+  const beto = await jugador(proxio.url, 'Beto', { gameId: 'padel' })
+  const lobbyAna2 = { proxy: null }
+  t.after(async () => { proxyAna.close(); beto.proxy.close(); if (lobbyAna2.proxy) lobbyAna2.proxy.close(); await proxio.stop() })
+
+  const emision = await lobbyAna.openBroadcast()
+  await emision.publish({ torneo: TORNEO, jugadores: [JUGADOR] })
+  const enlace = encodeBroadcastRef(emision.ref)
+
+  const mira = await beto.lobby.watchBroadcast(decodeBroadcastRef(enlace))
+  await hasta(() => mira.status === 'live' && mira.state && mira.state.torneo === TORNEO)
+
+  await emision.publish({ torneo: TORNEO, ronda: 2 })
+  await hasta(() => mira.state.ronda === 2)
+
+  // La página del emisor se recarga: conexión nueva, misma identidad, misma referencia.
+  proxyAna.close()
+  await hasta(() => mira.status === 'host-offline')
+  assert.equal(mira.state.ronda, 2, 'lo último que llegó se conserva')
+  lobbyAna2.proxy = cliente()
+  const lobbyOtraVez = await createLobby({ gameId: 'padel', proxy: lobbyAna2.proxy, identity: idAna })
+  const deNuevo = await lobbyOtraVez.openBroadcast({ ref: { key: emision.ref.key, secret: emision.ref.secret } })
+  await deNuevo.publish({ torneo: TORNEO, ronda: 3 })
+  await hasta(() => mira.status === 'live' && mira.state.ronda === 3, { ms: 8000 })
+
+  // ── LO QUE VIO EL PROXIO ──
+  const visto = proxio.text()
+  for (const secreto of [TORNEO, JUGADOR, emision.ref.secret, `"${K.BCAST}"`, `"${K.WATCH}"`]) {
+    assert.equal(visto.includes(secreto), false, `el proxio no puede ver «${secreto}»`)
+  }
+  for (const s of dirigidos(proxio)) {
+    if (s && s.t === '__cc_hello__') continue
+    assert.equal(parseEnvelope(s), null, 'todo lo de la emisión va sellado')
+  }
 })

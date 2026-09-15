@@ -6,6 +6,7 @@ import { Emitter, normalizeSeats } from './util.js'
 import { K, envelope, discoveryChannel, discoveryChannels } from './protocol.js'
 import { Transport } from './transport.js'
 import { Room, STATUS } from './room.js'
+import { Broadcast, newBroadcastRef } from './broadcast.js'
 import { createRepGate, rankRooms } from './reputation.js'
 
 export class Lobby extends Emitter {
@@ -19,6 +20,7 @@ export class Lobby extends Emitter {
     this.myPubkey = (this.identity && this.identity.me && this.identity.me.publickey) || null
     this._gate = createRepGate(this.reputation, config.matchmaking || {})
     this._rooms = new Set()
+    this._broadcasts = new Set()
     this._infoCollector = null
     this._wire()
   }
@@ -94,6 +96,40 @@ export class Lobby extends Emitter {
     await room._joinAsGuest()
     return room
   }
+
+  // ── Emisión: uno emite, los demás miran (broadcast.js) ─────────
+
+  /**
+   * Emitir en vivo, solo lectura para los demás. `opts.ref` retoma una emisión anterior
+   * con la misma clave y el mismo secreto: así el enlace que ya se compartió sigue
+   * sirviendo tras recargar. Sin `ref` se crea una nueva (`broadcast.ref` la devuelve).
+   * @param {{ ref?: { key: string, secret: string }, maxViewers?: number }} [opts]
+   */
+  async openBroadcast (opts = {}) {
+    await this.transport.connect()
+    const ref = opts.ref || newBroadcastRef(this.transport.node)
+    if (!ref.key || !ref.secret) throw Object.assign(new Error('[lobby] openBroadcast: incomplete ref'), { code: 'bad-ref' })
+    const b = new Broadcast({ transport: this.transport, gameId: this.gameId, role: 'host', ref, identity: this.identity, maxViewers: opts.maxViewers })
+    this._trackBroadcast(b)
+    return b._startAsHost()
+  }
+
+  /**
+   * Mirar una emisión con la referencia del enlace (`decodeBroadcastRef`): clave, secreto
+   * y llave del emisor. Solo se aceptan estados firmados por esa llave.
+   * @param {{ key: string, secret: string, hostPubkey: string }} ref
+   */
+  async watchBroadcast (ref) {
+    if (!ref || !ref.key || !ref.secret || !ref.hostPubkey) {
+      throw Object.assign(new Error('[lobby] watchBroadcast: incomplete ref'), { code: 'bad-ref' })
+    }
+    await this.transport.connect()
+    const b = new Broadcast({ transport: this.transport, gameId: this.gameId, role: 'viewer', ref, identity: this.identity })
+    this._trackBroadcast(b)
+    return b._startAsViewer()
+  }
+
+  _trackBroadcast (b) { this._broadcasts.add(b); b.on('closed', () => this._broadcasts.delete(b)) }
 
   // ── Descubrimiento ──────────────────────────────────────────────
 
@@ -212,6 +248,8 @@ export class Lobby extends Emitter {
   async destroy () {
     for (const room of this._rooms) { try { await room.leave() } catch (_) {} }
     this._rooms.clear()
+    for (const b of [...this._broadcasts]) { try { await b.close() } catch (_) {} }
+    this._broadcasts.clear()
     this.removeAllListeners()
   }
 

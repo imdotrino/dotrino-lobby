@@ -265,6 +265,52 @@ room.matchReceipt(pubkey) // { a, b, ts, sigA, sigB } | null
 
 ---
 
+## Emisión: uno emite, los demás miran (desde 0.10.0)
+
+Para lo que se enseña en vivo y nadie más toca —un torneo, un marcador—. No es una sala:
+no hay asientos, ni turnos, ni chat, ni lista de quién mira.
+
+```js
+import { createLobby, encodeBroadcastRef, decodeBroadcastRef } from '@dotrino/lobby'
+
+// Quien emite. Sin `ref` se crea una emisión nueva; con la de antes, el MISMO enlace
+// sigue sirviendo tras recargar (guárdala: la clave y el secreto son estables).
+const lobby = await createLobby({ gameId: 'padel', identity })
+const emision = await lobby.openBroadcast({ ref: guardada })
+await emision.publish(estado)                    // en cada cambio
+const enlace = `#watch=${encodeBroadcastRef(emision.ref)}`
+
+// Quien mira, con el enlace.
+const mira = await lobby.watchBroadcast(decodeBroadcastRef(textoDelEnlace))
+mira.on('state', (estado, { at }) => pintar(estado))
+mira.on('status', ({ status, reason }) => …)     // connecting | live | host-offline | denied | closed
+```
+
+Lo que garantiza, y cómo:
+
+| | |
+|---|---|
+| **Entra solo quien tiene el enlace** | el enlace lleva un **secreto** que viaja sellado al emisor; sin él contesta `denied` (`bad-secret`). Listar el canal en el proxio da un token y nada más |
+| **El enlace no muere con una recarga** | el canal lo nombra una **clave estable**, no el token del emisor; al volver se anuncia en el mismo canal y quien mira lo encuentra solo |
+| **Lo que llega lo escribió el emisor** | cada estado va **firmado** por su identidad y se verifica contra la llave del enlace (`verifyData`). Sellar protege de que alguien lo lea; firmar, de que alguien lo invente |
+| **Nadie sabe quién más mira** | quien mira **observa** el canal (`watch`), no se publica; el emisor solo cuenta tokens |
+| **Lo viejo no pisa lo nuevo** | `at` crece siempre (también tras recargar) y lo repetido se descarta |
+
+Límites, dichos: **nada se guarda fuera del emisor** — si se va, quien mira conserva lo
+último que le llegó (`host-offline`) y vuelve a recibir cuando el emisor vuelve. Tope de
+50 que miran por emisión (`maxViewers`). Cada `publish` es una firma y un sobre por cada
+uno que mira.
+
+| Evento de `Broadcast` | Payload | Cuándo |
+|---|---|---|
+| `state` | `(state, { at, seq })` | quien mira: estado nuevo y verificado |
+| `status` | `{ status, reason }` | cambia el estado de la conexión |
+| `viewers` | `n` | el emisor: cambió cuántos miran |
+| `event` | `{ event, data }` | `seal-failed`, `forged` (llegó algo sin la firma del emisor) |
+| `closed` | — | `close()` |
+
+---
+
 ## API
 
 ```ts
@@ -283,6 +329,11 @@ Room.action(a) / chat(text) / send(data) / start()
 Room.ratePlayer(pubkey, indicators, opts?) / matchReceipt(pubkey)
 Room.mySeat / status / seats / spectators / game / result / state
 Room.leave()
+
+Lobby.openBroadcast({ ref?, maxViewers? }): Promise<Broadcast>
+Lobby.watchBroadcast(ref): Promise<Broadcast>
+Broadcast.publish(state) / close() / ref / state / status / viewers
+encodeBroadcastRef(ref) / decodeBroadcastRef(text) / newBroadcastRef(node?)
 ```
 
 Ver tipos completos en [`src/index.d.ts`](./src/index.d.ts).

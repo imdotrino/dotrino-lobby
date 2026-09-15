@@ -5,11 +5,12 @@
 
 export { createLobby, Lobby } from './lobby.js'
 export { Room, STATUS, SEAT } from './room.js'
+export { Broadcast, newBroadcastRef, encodeBroadcastRef, decodeBroadcastRef } from './broadcast.js'
 export { createEngine } from './engine.js'
 export { Transport } from './transport.js'
 export {
   createRepGate, rankRooms, ratePlayer,
   receiptPayload, signReceiptHalf
 } from './reputation.js'
-export { K, discoveryChannel, discoveryChannels, roomChannel, envelope, parseEnvelope } from './protocol.js'
+export { K, discoveryChannel, discoveryChannels, roomChannel, broadcastChannel, envelope, parseEnvelope } from './protocol.js'
 export { Emitter, mulberry32, hashSeed, shuffle, normalizeSeats, samePubkey } from './util.js'

@@ -233,6 +233,15 @@ export class Transport extends Emitter {
     return this.proxy.sendSealedTo(token, env, peerPubkey ? { peerPubkey } : undefined)
   }
 
+  /**
+   * ¿Firmó `publickey` estos datos? Es `verifyData` del pilar (ECDSA P-256 sobre el JSON
+   * canónico, el mismo formato que `signData` de la bóveda). Contesta sí o no; no lanza.
+   */
+  async verifySignature (publickey, data, signature) {
+    const mod = await loadProxyModule()
+    return mod.verifyData(publickey, data, signature)
+  }
+
   /** Envío SELLADO por pubkey estable (cola offline 24 h). Invitaciones y re-clave. */
   sendSealedByPubkey (pubkeys, env) {
     return this.proxy.sendSealed(pubkeys, env)

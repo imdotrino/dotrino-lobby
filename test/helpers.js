@@ -9,12 +9,13 @@
 
 import { Emitter } from '../src/util.js'
 import { parseEnvelope } from '../src/protocol.js'
-import { seal, open, isSealed, makeEncKeypair } from '@dotrino/proxy-client'
+import { seal, open, isSealed, makeEncKeypair, verifyData } from '@dotrino/proxy-client'
 
 export class MockHub {
   constructor () {
     this.endpoints = new Map()
     this.channels = new Map()
+    this.watchers = new Map() // canal → Set<token> que lo OBSERVAN (`watch`): reciben avisos, no salen en la lista
     this.byPubkey = new Map()
     this.encPubs = new Map() // publickey → encPub anunciada (lo que hace el `identify`)
     /** Todo lo que pasa por el proxio, tal cual lo ve él. */
@@ -67,15 +68,25 @@ export class MockHub {
     if (!s) { s = new Set(); this.channels.set(channel, s) }
     const others = [...s]
     s.add(token)
-    for (const m of others) { const ep = this.endpoints.get(m); if (ep && !ep._down) ep.emit('channel_joined', channel, token) }
+    for (const m of [...others, ...this.watchersOf(channel)]) { const ep = this.endpoints.get(m); if (m !== token && ep && !ep._down) ep.emit('channel_joined', channel, token) }
   }
 
   leave (token, channel) {
     const s = this.channels.get(channel)
     if (!s || !s.has(token)) return
     s.delete(token)
-    for (const m of s) { const ep = this.endpoints.get(m); if (ep && !ep._down) ep.emit('channel_left', channel, token) }
+    for (const m of [...s, ...this.watchersOf(channel)]) { const ep = this.endpoints.get(m); if (m !== token && ep && !ep._down) ep.emit('channel_left', channel, token) }
   }
+
+  watch (token, channel) {
+    let s = this.watchers.get(channel)
+    if (!s) { s = new Set(); this.watchers.set(channel, s) }
+    s.add(token)
+  }
+
+  unwatch (token, channel) { const s = this.watchers.get(channel); if (s) s.delete(token) }
+
+  watchersOf (channel) { const s = this.watchers.get(channel); return s ? [...s] : [] }
 
   members (channel) { const s = this.channels.get(channel); return s ? [...s] : [] }
 
@@ -85,8 +96,9 @@ export class MockHub {
     for (const [ch, s] of this.channels) {
       if (!s.has(token)) continue
       s.delete(token)
-      for (const m of s) { const o = this.endpoints.get(m); if (o && !o._down) o.emit('peer_disconnected', token, ch) }
+      for (const m of [...s, ...this.watchersOf(ch)]) { const o = this.endpoints.get(m); if (m !== token && o && !o._down) o.emit('peer_disconnected', token, ch) }
     }
+    for (const s of this.watchers.values()) s.delete(token)
   }
 }
 
@@ -165,8 +177,9 @@ export class MockTransport extends Emitter {
     for (const [ch, s] of hub.channels) {
       if (!s.has(oldToken)) continue
       s.delete(oldToken)
-      for (const m of s) { const o = hub.endpoints.get(m); if (o && !o._down) o.emit('peer_disconnected', oldToken, ch) }
+      for (const m of [...s, ...hub.watchersOf(ch)]) { const o = hub.endpoints.get(m); if (m !== oldToken && o && !o._down) o.emit('peer_disconnected', oldToken, ch) }
     }
+    for (const s of hub.watchers.values()) s.delete(oldToken)
     hub.endpoints.delete(oldToken)
     this._token = newToken
     this._down = false
@@ -228,6 +241,9 @@ export class MockTransport extends Emitter {
   publish (channel) { this.hub.join(this._token, channel); return Promise.resolve({ ok: true }) }
   unpublish (channel) { this.hub.leave(this._token, channel); return Promise.resolve({ ok: true }) }
   list (channel) { return Promise.resolve(this.hub.members(channel)) }
+  watch (channel) { this.hub.watch(this._token, channel); return Promise.resolve(this.hub.members(channel)) }
+  unwatch (channel) { this.hub.unwatch(this._token, channel); return Promise.resolve({ ok: true }) }
+  verifySignature (publickey, data, signature) { return verifyData(publickey, data, signature) }
   listChannels () { return Promise.resolve([]) }
   channelCount (channel) { return Promise.resolve(this.hub.members(channel).length) }
   connectWebRTC () { return Promise.resolve() }

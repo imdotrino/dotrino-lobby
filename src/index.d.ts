@@ -177,6 +177,48 @@ export declare class Room extends Emitter {
   leave (): Promise<void>
 }
 
+export type BroadcastStatus = 'connecting' | 'live' | 'host-offline' | 'denied' | 'closed'
+
+/** Lo que lleva el enlace de una emisión (`encodeBroadcastRef` / `decodeBroadcastRef`). */
+export interface BroadcastRef {
+  /** Nombra el canal; estable, sobrevive a que el emisor reconecte o recargue. */
+  key: string
+  /** Prueba que se tiene el enlace; viaja siempre sellado. */
+  secret: string
+  /** Llave del emisor: solo se aceptan estados firmados por ella. */
+  hostPubkey: string
+}
+
+/**
+ * Una emisión: uno emite, los demás miran (solo lectura). Eventos:
+ * 'state'(state, { at, seq }) quien mira, estado nuevo y verificado;
+ * 'status'({ status, reason }); 'viewers'(n) el emisor; 'event'({ event, data }); 'closed'.
+ */
+export declare class Broadcast extends Emitter {
+  readonly role: 'host' | 'viewer'
+  readonly isHost: boolean
+  readonly gameId: string
+  readonly key: string
+  readonly channel: string
+  readonly hostPubkey: string
+  readonly ref: BroadcastRef
+  readonly status: BroadcastStatus
+  /** Último estado publicado (emisor) o recibido y verificado (quien mira). */
+  readonly state: any
+  /** Marca de tiempo del último estado; crece siempre, también tras recargar el emisor. */
+  readonly at: number
+  /** Cuántos miran (solo el emisor). */
+  readonly viewers: number
+  /** Emisor: firma el estado una vez y lo sella a cada uno de los que miran. */
+  publish (state: any): Promise<void>
+  close (): Promise<void>
+}
+
+export function newBroadcastRef (node?: string | null): { key: string; secret: string }
+export function encodeBroadcastRef (ref: BroadcastRef): string
+/** Lanza con `code: 'bad-ref'` si el texto no tiene la forma `clave.secreto.x.y`. */
+export function decodeBroadcastRef (text: string): BroadcastRef
+
 /**
  * Lobby. Eventos: 'invite'({from, roomId, name, fromName}) cuando un contacto te
  * invita; 'rooms-changed'({type:'joined'|'left', token}) cuando cambia el canal
@@ -193,6 +235,10 @@ export declare class Lobby extends Emitter {
   inviteContact (pubkey: string, opts?: { roomId?: string; name?: string }): Promise<void>
   listContacts (): Promise<any[]>
   reputationOf (pubkey: string): Promise<any>
+  /** Emitir en vivo. `opts.ref` retoma una emisión (mismo enlace) tras recargar. */
+  openBroadcast (opts?: { ref?: { key: string; secret: string }; maxViewers?: number }): Promise<Broadcast>
+  /** Mirar una emisión con la referencia del enlace. */
+  watchBroadcast (ref: BroadcastRef): Promise<Broadcast>
   destroy (): Promise<void>
 }
 
@@ -218,6 +264,11 @@ export declare class Transport {
   helloTo (token: string | string[]): void
   /** Saluda y espera a saber con quién habla. Lanza `no-peer-identity` si nadie contesta. */
   peerIdentity (token: string, opts?: { timeout?: number }): Promise<string>
+  /** ¿Firmó `publickey` estos datos? (`verifyData` del pilar). No lanza. */
+  verifySignature (publickey: string, data: any, signature: string): Promise<boolean>
+  /** Observar un canal sin salir en su lista. Resuelve con los tokens, o `null` si no se pudo. */
+  watch (channel: string): Promise<string[] | null>
+  unwatch (channel: string): Promise<any>
 }
 
 export function createLobby (opts: CreateLobbyOptions): Promise<Lobby>
@@ -244,8 +295,9 @@ export function signReceiptHalf (identity: any, a: string, b: string, ts: number
 
 // Protocolo / utilidades
 export const K: Record<string, string>
-export function discoveryChannel (gameId: string): string
+export function discoveryChannel (gameId: string, nodeId?: string | null): string
 export function roomChannel (gameId: string, roomId: string): string
+export function broadcastChannel (gameId: string, key: string): string
 export function envelope (gameId: string, roomId: string, kind: string, data?: any, seq?: number): any
 export function parseEnvelope (payload: any): { g: string; r: string; k: string; d: any; s: number | null } | null
 export function mulberry32 (seed: number): () => number

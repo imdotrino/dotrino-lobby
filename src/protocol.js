@@ -43,7 +43,12 @@ export const K = {
   RESULT_OFFER: 'result.offer', // { resultId, data:{op:'result',gameId,a,b,winner,ts}, sigA }  resultado a co-firmar
   RESULT_SIGN: 'result.sign',   // { resultId, sig }  segunda firma del resultado (para ELO)
   KICKED: 'kicked',         // { reason }
-  PONG: 'pong'              // { ts }
+  PONG: 'pong',             // { ts }
+
+  // ── emisión (broadcast.js): uno emite, los demás miran ───────
+  WATCH: 'bcast.watch',     // quien mira → emisor { secret, at? }  quiero mirar (y sigo aquí)
+  BCAST: 'bcast.state',     // emisor → quien mira { payload:{v,g,k,at,seq,state}, signature }
+  BCAST_DENIED: 'bcast.denied' // emisor → quien mira { reason:'bad-secret'|'full' }
 }
 
 /**
@@ -94,7 +99,7 @@ const NODE_ID_LEN = 12
 // decide el proxio (que excluye los caracteres confundibles) y esta librería no
 // tiene por qué llevar una copia que se desincronice. Un id con un símbolo que
 // el proxio no emite simplemente no va a coincidir con ningún nodo.
-const isNodeId = (s) => new RegExp(`^[1-9A-Z]{${NODE_ID_LEN}}$`).test(String(s || ''))
+export const isNodeId = (s) => new RegExp(`^[1-9A-Z]{${NODE_ID_LEN}}$`).test(String(s || ''))
 
 const withNode = (prefix, name) => (prefix ? `${prefix}/${name}` : name)
 
@@ -128,6 +133,17 @@ export function discoveryChannels (gameId, nodeIds = []) {
 export const roomChannel = (gameId, roomId) => {
   const id = String(roomId || '').slice(0, NODE_ID_LEN)
   return withNode(isNodeId(id) ? id : null, `ccroom/${gameId}/${roomId}`)
+}
+
+/**
+ * Canal de una emisión (broadcast.js). Solo el emisor se publica en él; quien mira lo
+ * OBSERVA (`watch`) y no sale en la lista. Como la sala, vive en el proxio que dice el
+ * prefijo de la clave — que es estable, así que el emisor vuelve al mismo canal aunque
+ * reconecte por otro nodo.
+ */
+export const broadcastChannel = (gameId, key) => {
+  const id = String(key || '').slice(0, NODE_ID_LEN)
+  return withNode(isNodeId(id) ? id : null, `ccbcast/${gameId}/${key}`)
 }
 
 /**
