@@ -40,6 +40,10 @@ jobs:
 
       # LAS PRUEBAS ANTES DE PUBLICAR. Una versión que no pasa su suite no llega a npm.
       - run: npm test
+      # El registro de compatibilidad (dotrino-roadmap, CONVENCIONES §14): nada instalado en
+      # una versión marcada rota ni por debajo de lo que exige la ficha. Con @latest, que trae
+      # la lista de rotas más nueva. Va antes de publicar: aquí sí frena.
+      - run: npx --yes @dotrino/roadmap@latest check
 
       - name: SBOM (CycloneDX)
         run: |
