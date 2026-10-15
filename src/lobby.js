@@ -3,7 +3,7 @@
 // por reputación, e invita contactos por pubkey (cola offline).
 
 import { Emitter, normalizeSeats } from './util.js'
-import { K, envelope, discoveryChannel, discoveryChannels } from './protocol.js'
+import { K, envelope, discoveryChannels, ownDiscoveryChannel } from './protocol.js'
 import { Transport } from './transport.js'
 import { Room, STATUS } from './room.js'
 import { Broadcast, newBroadcastRef } from './broadcast.js'
@@ -57,8 +57,7 @@ export class Lobby extends Emitter {
 
   /** El canal donde ANUNCIAMOS: el del proxio al que estamos conectados. */
   _myDiscoveryChannel () {
-    const t = this.transport
-    return discoveryChannel(this.gameId, (t && (t.node || (t.client && t.client.node))) || null)
+    return ownDiscoveryChannel(this.gameId, this.transport)
   }
 
   // Observar los canales de descubrimiento para recibir altas/bajas de salas en

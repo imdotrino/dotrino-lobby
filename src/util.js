@@ -116,6 +116,13 @@ export function samePubkey (a, b) {
 }
 
 /** Promesa que resuelve tras `ms`. */
+/** Un Error con `code`: quien lo recibe decide por el código, no por la frase. */
+export function errorWithCode (message, code) {
+  const e = /** @type {Error & { code: string }} */ (new Error(message))
+  e.code = code
+  return e
+}
+
 export function delay (ms) { return new Promise(r => setTimeout(r, ms)) }
 
 /** Id corto aleatorio (no criptográfico) para correlación de mensajes. */

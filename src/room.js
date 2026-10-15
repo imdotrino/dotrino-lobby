@@ -9,7 +9,7 @@
 // lo que llega.
 
 import { Emitter, clock, samePubkey } from './util.js'
-import { K, envelope, roomChannel, discoveryChannel } from './protocol.js'
+import { K, envelope, roomChannel, ownDiscoveryChannel } from './protocol.js'
 import { createEngine } from './engine.js'
 import { signReceiptHalf, signEventHalf, eventPayload, ratePlayer as repRatePlayer } from './reputation.js'
 
@@ -134,8 +134,7 @@ export class Room extends Emitter {
    * todos — así el descubrimiento no necesita un nodo árbitro. Ver protocol.js.
    */
   _myDiscoveryChannel () {
-    const t = this.transport
-    return discoveryChannel(this.gameId, (t && (t.node || (t.client && t.client.node))) || null)
+    return ownDiscoveryChannel(this.gameId, this.transport)
   }
 
   // Re-publica la sala periódicamente: las entradas de canal del proxy expiran

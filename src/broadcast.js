@@ -24,7 +24,7 @@
 // Lo que NO hace, y se dice: guardar el estado fuera del emisor. Si el emisor se va,
 // quien mira conserva lo último que le llegó y lo vuelve a encontrar cuando vuelve.
 
-import { Emitter, clock, samePubkey } from './util.js'
+import { Emitter, clock, samePubkey, errorWithCode } from './util.js'
 import { K, envelope, broadcastChannel, isNodeId } from './protocol.js'
 
 const REFRESH_MS = 60 * 1000 // quien mira se vuelve a anunciar cada minuto
@@ -35,12 +35,6 @@ const REPUBLISH_MS = 10 * 60 * 1000 // las entradas de canal del proxio caducan 
 const DEFAULT_MAX_VIEWERS = 50
 
 const B64URL = /^[A-Za-z0-9_-]+$/
-
-function errorCon (message, code) {
-  const e = /** @type {Error & { code: string }} */ (new Error(message))
-  e.code = code
-  return e
-}
 
 function randomB64url (bytes) {
   const b = new Uint8Array(bytes)
@@ -71,14 +65,14 @@ export function encodeBroadcastRef ({ key, secret, hostPubkey } = {}) {
   let jwk = null
   try { jwk = typeof hostPubkey === 'string' ? JSON.parse(hostPubkey) : hostPubkey } catch (_) { /* abajo */ }
   const parts = [key, secret, jwk && jwk.crv === 'P-256' ? jwk.x : null, jwk && jwk.crv === 'P-256' ? jwk.y : null]
-  if (!parts.every(p => typeof p === 'string' && B64URL.test(p))) throw errorCon('[lobby] incomplete broadcast ref', 'bad-ref')
+  if (!parts.every(p => typeof p === 'string' && B64URL.test(p))) throw errorWithCode('[lobby] incomplete broadcast ref', 'bad-ref')
   return parts.join('.')
 }
 
 /** Lo contrario de `encodeBroadcastRef`. Lanza `bad-ref` si el texto no tiene esa forma. */
 export function decodeBroadcastRef (text) {
   const parts = String(text || '').split('.')
-  if (parts.length !== 4 || !parts.every(p => p && B64URL.test(p))) throw errorCon('[lobby] malformed broadcast ref', 'bad-ref')
+  if (parts.length !== 4 || !parts.every(p => p && B64URL.test(p))) throw errorWithCode('[lobby] malformed broadcast ref', 'bad-ref')
   const [key, secret, x, y] = parts
   return { key, secret, hostPubkey: JSON.stringify({ crv: 'P-256', kty: 'EC', x, y }) }
 }
@@ -173,11 +167,11 @@ export class Broadcast extends Emitter {
    * mira para descartar lo viejo o repetido.
    */
   async publish (state) {
-    if (!this.isHost) throw errorCon('[lobby] only the host publishes a broadcast', 'not-host')
-    if (this._closed) throw errorCon('[lobby] this broadcast is closed', 'closed')
+    if (!this.isHost) throw errorWithCode('[lobby] only the host publishes a broadcast', 'not-host')
+    if (this._closed) throw errorWithCode('[lobby] this broadcast is closed', 'closed')
     const payload = { v: 1, g: this.gameId, k: this.key, at: Math.max(clock.now(), this.at + 1), seq: ++this._seq, state }
     const signed = await this.identity.signData(payload)
-    if (!signed || typeof signed.signature !== 'string') throw errorCon('[lobby] the identity returned no signature', 'no-signature')
+    if (!signed || typeof signed.signature !== 'string') throw errorWithCode('[lobby] the identity returned no signature', 'no-signature')
     this.at = payload.at
     this.state = state
     this._latest = { payload, signature: signed.signature }

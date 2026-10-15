@@ -27,7 +27,7 @@
 // llave pública y no sube a la app. Aquí se usa; no se reimplementa.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { Emitter } from './util.js'
+import { Emitter, errorWithCode } from './util.js'
 import { parseEnvelope } from './protocol.js'
 
 /**
@@ -54,12 +54,6 @@ async function loadIdentity () {
 }
 
 /** Error con `code`: los fallos se comprueban por el código, nunca por la frase. */
-function errorCon (message, code) {
-  const e = /** @type {Error & { code: string }} */ (new Error(message))
-  e.code = code
-  return e
-}
-
 export class Transport extends Emitter {
   /**
    * @param {object} opts
@@ -107,7 +101,7 @@ export class Transport extends Emitter {
       // significaría mandar el chat y las jugadas en claro, que es justo lo que esto
       // viene a cerrar.
       if (!this.identity || !this.identity.me || !this.identity.me.publickey) {
-        throw errorCon('[lobby] no identity: nothing can be sealed, so nothing is sent', 'no-identity')
+        throw errorWithCode('[lobby] no identity: nothing can be sealed, so nothing is sent', 'no-identity')
       }
       await this._wireSealing(mod)
       this._wire()
@@ -136,13 +130,13 @@ export class Transport extends Emitter {
     this.proxy.updateConfig({ requireSealed: true })
     if (this.proxy.myEncPub && this.proxy.sealing) { this._myEncPub = this.proxy.myEncPub; return }
     if (typeof mod.identitySealing !== 'function') {
-      throw errorCon('[lobby] @dotrino/proxy-client >= 0.21.0 required (identitySealing)', 'no-sealing-support')
+      throw errorWithCode('[lobby] @dotrino/proxy-client >= 0.21.0 required (identitySealing)', 'no-sealing-support')
     }
     if (typeof this.identity.getEncryptionPubkey !== 'function') {
-      throw errorCon('[lobby] this identity exposes no getEncryptionPubkey()', 'no-encpub')
+      throw errorWithCode('[lobby] this identity exposes no getEncryptionPubkey()', 'no-encpub')
     }
     const encPub = await this.identity.getEncryptionPubkey()
-    if (!encPub) throw errorCon('[lobby] the vault returned no encryption key', 'no-encpub')
+    if (!encPub) throw errorWithCode('[lobby] the vault returned no encryption key', 'no-encpub')
     this._myEncPub = encPub
     this.proxy.updateConfig({
       myEncPub: encPub,
@@ -275,7 +269,7 @@ export class Transport extends Emitter {
       })
       const timer = setTimeout(() => {
         off()
-        reject(errorCon(`[lobby] ${token} never said whose it is`, 'no-peer-identity'))
+        reject(errorWithCode(`[lobby] ${token} never said whose it is`, 'no-peer-identity'))
       }, timeout)
       if (timer.unref) timer.unref()
       try { this.helloTo(token) } catch (e) { clearTimeout(timer); off(); reject(e) }

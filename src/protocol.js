@@ -112,6 +112,13 @@ export const discoveryChannel = (gameId, nodeId) =>
   withNode(isNodeId(nodeId) ? nodeId : null, `cclobby/${gameId}`)
 
 /**
+ * El canal donde se ANUNCIA: el del proxio al que está conectado `transport`.
+ * Lo usan Lobby y Room; una sola copia para que no digan cosas distintas.
+ */
+export const ownDiscoveryChannel = (gameId, transport) =>
+  discoveryChannel(gameId, (transport && (transport.node || (transport.client && transport.client.node))) || null)
+
+/**
  * Todos los canales de descubrimiento a consultar: el del propio proxio y el de
  * cada nodo que conozca. Se deduplica y se deja el propio PRIMERO, porque es el
  * que va a contestar más rápido y el que se usa para publicar.
