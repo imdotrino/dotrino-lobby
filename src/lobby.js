@@ -2,7 +2,7 @@
 // Crea/lista/une salas de un juego, hace partida rápida (quickMatch) filtrando
 // por reputación, e invita contactos por pubkey (cola offline).
 
-import { Emitter, normalizeSeats } from './util.js'
+import { Emitter, normalizeSeats, errorWithCode } from './util.js'
 import { K, envelope, discoveryChannels, ownDiscoveryChannel } from './protocol.js'
 import { Transport } from './transport.js'
 import { Room, STATUS } from './room.js'
@@ -107,7 +107,7 @@ export class Lobby extends Emitter {
   async openBroadcast (opts = {}) {
     await this.transport.connect()
     const ref = opts.ref || newBroadcastRef(this.transport.node)
-    if (!ref.key || !ref.secret) throw Object.assign(new Error('[lobby] openBroadcast: incomplete ref'), { code: 'bad-ref' })
+    if (!ref.key || !ref.secret) throw errorWithCode('[lobby] openBroadcast: incomplete ref', 'bad-ref')
     const b = new Broadcast({ transport: this.transport, gameId: this.gameId, role: 'host', ref, identity: this.identity, maxViewers: opts.maxViewers })
     this._trackBroadcast(b)
     return b._startAsHost()
