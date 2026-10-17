@@ -120,7 +120,7 @@ export class Lobby extends Emitter {
    */
   async watchBroadcast (ref) {
     if (!ref || !ref.key || !ref.secret || !ref.hostPubkey) {
-      throw Object.assign(new Error('[lobby] watchBroadcast: incomplete ref'), { code: 'bad-ref' })
+      throw errorWithCode('[lobby] watchBroadcast: incomplete ref', 'bad-ref')
     }
     await this.transport.connect()
     const b = new Broadcast({ transport: this.transport, gameId: this.gameId, role: 'viewer', ref, identity: this.identity })
@@ -325,7 +325,7 @@ export async function createLobby (opts = {}) {
   // identidad no hay a quién, ni nadie puede sellarnos a nosotros. Antes se degradaba
   // y la sala funcionaba en claro; eso es justo lo que esto cierra.
   if (!identity || !identity.me || !identity.me.publickey) {
-    throw Object.assign(new Error('[lobby] createLobby: no identity — nothing can be sealed'), { code: 'no-identity' })
+    throw errorWithCode('[lobby] createLobby: no identity — nothing can be sealed', 'no-identity')
   }
   const config = {
     seats: normalizeSeats(opts.seats || { min: 2, max: 2 }),
